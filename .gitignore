@@ -1,0 +1,61 @@
+# --- Privacy guard -----------------------------------------------------------
+# Clinical photos must never reach this public repository. Image files are
+# ignored everywhere except in directories that hold synthetic or UI assets.
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+*.png
+*.PNG
+*.heic
+*.HEIC
+*.heif
+*.HEIF
+*.dng
+*.DNG
+!tests/fixtures/synthetic/**
+!doc/assets/**
+!frontend/public/**
+
+# Original requirements document contains clinical example photos.
+doc/Project Requirements Document/
+
+# Real, de-identified photos for local algorithm tuning only.
+local_fixtures/
+
+# Model weights are distributed via GitHub Releases, not git.
+*.onnx
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Built frontend assets are produced by CI and packaged into the wheel.
+src/dental_image_organizer/web/
+
+# --- Node --------------------------------------------------------------------
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# --- Editors / OS ------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Local environment -------------------------------------------------------
+.env
+.env.*
+!.env.example

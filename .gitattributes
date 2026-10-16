@@ -1,0 +1,14 @@
+# Development happens on Windows while install.sh and the launcher run on macOS;
+# CRLF line endings would break shell scripts, so normalize everything to LF.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.ps1  text eol=crlf
+
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.heic binary
+*.onnx binary
+*.npz  binary
+*.icns binary
