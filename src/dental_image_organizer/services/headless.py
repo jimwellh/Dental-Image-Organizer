@@ -10,7 +10,7 @@ from typing import Literal
 
 import structlog
 
-from dental_image_organizer.core.align import prepare_reference
+from dental_image_organizer.core.align import PreparedReference, prepare_reference
 from dental_image_organizer.core.imageio import (
     MAX_JPEG_DIMENSION,
     DecodedImage,
@@ -41,6 +41,7 @@ from dental_image_organizer.services.procedure import (
 log = structlog.get_logger(__name__)
 
 OutcomeStatus = Literal["ok", "needs_review", "failed", "skipped"]
+Frame = tuple[datetime, RGBImage]
 MTIME_WARNING = "No capture time in EXIF; used the file modification time."
 
 
@@ -79,74 +80,44 @@ def run_procedure(
     # Validate names before any work so a bad name cannot leave a half-written export.
     sanitize_component(patient)
     sanitize_component(title)
-    reference = _load(reference_path)
-    size = output_size(reference.size, output_scale)
-    prepared = prepare_reference(reference.rgb)
+    # Events are tagged with a position, never a file name: patient folders and re-processed
+    # exports carry patient names (spec §4.13). 0 is the reference; photos count from 1.
+    with structlog.contextvars.bound_contextvars(photo=0):
+        reference = _load(reference_path)
+        size = output_size(reference.size, output_scale)
+        prepared = prepare_reference(reference.rgb)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    taken = {p.name for p in out_dir.iterdir()}
-    reference_time, _ = _captured_at(reference, reference_path)
-    reference_image = render_reference(reference.rgb, size)
-    reference_output = _write(
-        out_dir,
-        taken,
-        photo_filename(patient, title, reference_time),
-        encode_jpeg(reference_image, reference.metadata),
-    )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        taken = {p.name for p in out_dir.iterdir()}
+        reference_time, _ = _captured_at(reference, reference_path)
+        reference_image = render_reference(reference.rgb, size)
+        reference_output = _write(
+            out_dir,
+            taken,
+            photo_filename(patient, title, reference_time),
+            encode_jpeg(reference_image, reference.metadata),
+        )
 
     # Every output shares `size`, so shrinking each frame as it arrives keeps the frames held for
-    # the sequence within the same 1 GB budget instead of holding every full-size render until
+    # the sequence within the same pixel budget instead of holding every full-size render until
     # the end. The count is the most frames this batch can produce (skips only reduce it).
     strip_height = fit_strip_height(
         [size] * (1 + len(photo_paths)),
         max_width=MAX_JPEG_DIMENSION,
         max_pixels=MAX_SEQUENCE_PIXELS,
     )
-    frames: list[tuple[datetime, RGBImage]] = [
-        (reference_time, scale_to_height(reference_image, strip_height))
-    ]
+    frames: list[Frame] = [(reference_time, scale_to_height(reference_image, strip_height))]
     outcomes: list[PhotoOutcome] = []
-    for path in photo_paths:
+    for number, path in enumerate(photo_paths, start=1):
         # Alignment lives in core/, which must not know about photos; binding here tags its
-        # debug events with the file name without leaking a patient name or title.
-        with structlog.contextvars.bound_contextvars(source=path.name):
-            try:
-                photo = _load(path)
-            except UnsupportedFormatError as exc:
-                outcomes.append(
-                    PhotoOutcome(path, "skipped", message=str(exc), skip_reason=exc.reason)
-                )
-                continue
-            except CorruptImageError as exc:
-                log.error("photo_unreadable", source=path.name, error=str(exc))
-                outcomes.append(PhotoOutcome(path, "failed", message=str(exc)))
-                continue
-            except OSError as exc:
-                # str(exc) embeds the full path, and folders are often named after patients.
-                log.error("photo_unreadable", source=path.name, error=exc.strerror)
-                outcomes.append(PhotoOutcome(path, "failed", message=str(exc)))
-                continue
-            edit = compute_edit(photo.rgb, prepared)
-            image = render_edit(photo.rgb, edit, size)
-            when, from_file = _captured_at(photo, path)
-            output = _write(
-                out_dir,
-                taken,
-                photo_filename(patient, title, when),
-                encode_jpeg(image, photo.metadata),
+        # debug events with the photo's position.
+        with structlog.contextvars.bound_contextvars(photo=number):
+            outcome, frame = _process_photo(
+                path, prepared, size, strip_height, out_dir, taken, patient=patient, title=title
             )
-            frames.append((when, scale_to_height(image, strip_height)))
-            notes = [m for m in (edit.align.message, MTIME_WARNING if from_file else None) if m]
-            outcomes.append(
-                PhotoOutcome(
-                    path,
-                    edit.align.status,
-                    output,
-                    edit.align.confidence,
-                    edit.align.model,
-                    " ".join(notes) or None,
-                )
-            )
+        outcomes.append(outcome)
+        if frame is not None:
+            frames.append(frame)
 
     # Mixing EXIF times that carry an offset with naive file times must not break sorting;
     # the recorded wall-clock time is what orders a single case.
@@ -166,14 +137,71 @@ def run_procedure(
     return ProcedureReport(reference_output, outcomes, sequence_output)
 
 
+def _process_photo(
+    path: Path,
+    prepared: PreparedReference,
+    size: tuple[int, int],
+    strip_height: int,
+    out_dir: Path,
+    taken: set[str],
+    *,
+    patient: str,
+    title: str,
+) -> tuple[PhotoOutcome, Frame | None]:
+    """Align, render, and write one photo; a failure is recorded, never raised (spec §4.13)."""
+    try:
+        photo = _load(path)
+    except UnsupportedFormatError as exc:
+        return PhotoOutcome(path, "skipped", message=str(exc), skip_reason=exc.reason), None
+    except CorruptImageError as exc:
+        log.error("photo_unreadable", error=str(exc))
+        return PhotoOutcome(path, "failed", message=str(exc)), None
+    except OSError as exc:
+        log.error("photo_unreadable", error=_os_error_message(exc))
+        return PhotoOutcome(path, "failed", message=_os_error_message(exc)), None
+    try:
+        when, from_file = _captured_at(photo, path)
+        edit = compute_edit(photo.rgb, prepared)
+        image = render_edit(photo.rgb, edit, size)
+        data = encode_jpeg(image, photo.metadata)
+        frame = scale_to_height(image, strip_height)
+        # Writing last keeps a photo that fails at any earlier step from leaving a file behind.
+        output = _write(out_dir, taken, photo_filename(patient, title, when), data)
+    except OSError as exc:
+        log.error("photo_failed", error=_os_error_message(exc))
+        return PhotoOutcome(path, "failed", message=_os_error_message(exc)), None
+    except Exception as exc:
+        # One bad photo never aborts a batch: an OpenCV assertion or a MemoryError on a large
+        # render fails only this photo. The trace is logged for fixing the cause.
+        log.exception("photo_failed")
+        detail = str(exc).strip()
+        message = f"Unexpected {type(exc).__name__}" + (f": {detail}" if detail else "")
+        return PhotoOutcome(path, "failed", message=message), None
+    notes = [m for m in (edit.align.message, MTIME_WARNING if from_file else None) if m]
+    outcome = PhotoOutcome(
+        path,
+        edit.align.status,
+        output,
+        edit.align.confidence,
+        edit.align.model,
+        " ".join(notes) or None,
+    )
+    return outcome, (when, frame)
+
+
 def _load(path: Path) -> DecodedImage:
     return decode(path.read_bytes())
+
+
+def _os_error_message(exc: OSError) -> str:
+    # str(exc) embeds the full path, and patient folders and exports carry patient names.
+    return exc.strerror or type(exc).__name__
 
 
 def _captured_at(image: DecodedImage, path: Path) -> tuple[datetime, bool]:
     if image.metadata.captured_at is not None:
         return image.metadata.captured_at, False
-    log.warning("capture_time_from_file", source=path.name)
+    log.warning("capture_time_from_file")
     return datetime.fromtimestamp(path.stat().st_mtime), True
 
 

@@ -25,3 +25,7 @@ class CorruptImageError(DioError):
 
 class InvalidNameError(DioError):
     code = "invalid_name"
+
+
+class OutputTooLargeError(DioError):
+    code = "output_too_large"

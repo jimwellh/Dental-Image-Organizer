@@ -8,6 +8,7 @@ from dental_image_organizer.core.align import prepare_reference
 from dental_image_organizer.core.color import to_lab
 from dental_image_organizer.core.imageio import decode
 from dental_image_organizer.core.render import coverage_mask
+from dental_image_organizer.errors import OutputTooLargeError
 from dental_image_organizer.services.procedure import (
     compute_edit,
     output_size,
@@ -80,6 +81,21 @@ def test_output_size(scale: float, expected: tuple[int, int]) -> None:
 def test_output_scale_outside_the_allowed_set_is_rejected() -> None:
     with pytest.raises(ValueError):
         output_size((1200, 800), 3.0)
+
+
+@pytest.mark.parametrize(
+    ("reference_size", "scale"),
+    [((32751, 10), 2.0), ((10, 43668), 1.5), ((65501, 10), 1.0)],
+)
+def test_output_beyond_the_jpeg_limit_is_rejected(
+    reference_size: tuple[int, int], scale: float
+) -> None:
+    with pytest.raises(OutputTooLargeError):
+        output_size(reference_size, scale)
+
+
+def test_output_at_the_jpeg_limit_is_accepted() -> None:
+    assert output_size((32750, 10), 2.0) == (65500, 20)
 
 
 def test_render_reference_upscales_the_reference() -> None:

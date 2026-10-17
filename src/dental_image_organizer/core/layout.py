@@ -9,13 +9,12 @@ from typing import cast
 import cv2
 import numpy as np
 
-from dental_image_organizer.core.imageio import RGBImage
+from dental_image_organizer.core.imageio import MAX_PIXELS, RGBImage
 
-# The user capped the sequence image at 1 GB uncompressed (decision of 2026-10-17). The strip is
-# RGB uint8, so 3 bytes per pixel turns 1,000,000,000 bytes into 333,333,333 px. The JPEG width
-# limit alone left the height unbounded: nine 2x-scaled 12 MP frames reached ~357 MP.
-MAX_SEQUENCE_BYTES = 1_000_000_000
-MAX_SEQUENCE_PIXELS = MAX_SEQUENCE_BYTES // 3  # RGB uint8
+# The JPEG width limit alone left the height unbounded: nine 2x-scaled 12 MP frames reached
+# ~357 MP. The cap is the decoder's own limit (200 MP, 600 MB as RGB uint8) so the app can read
+# back every sequence it writes; the earlier 1 GB cap (333 MP) produced strips decode() rejects.
+MAX_SEQUENCE_PIXELS = MAX_PIXELS
 
 
 def render_sequence(

@@ -19,6 +19,26 @@ def test_logging_follows_a_replaced_stderr(monkeypatch: pytest.MonkeyPatch) -> N
     assert "still_logged" in second.getvalue()
 
 
+def test_exception_logs_omit_local_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Locals in a traceback include patient names, which must never be logged (spec §4.13).
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stream)
+    configure_logging("INFO")
+
+    def fail(patient: str) -> None:
+        raise ValueError(f"boom for {len(patient)} chars")
+
+    # Built at runtime so the name is only a local, not part of a source line in the trace.
+    patient = " ".join(["Alex", "Wang"])
+    try:
+        fail(patient)
+    except ValueError:
+        structlog.get_logger("test").exception("failed")
+
+    assert "ValueError: boom for 9 chars" in stream.getvalue()
+    assert "Alex Wang" not in stream.getvalue()
+
+
 def test_level_filters_lower_messages(monkeypatch: pytest.MonkeyPatch) -> None:
     stream = io.StringIO()
     monkeypatch.setattr(sys, "stderr", stream)

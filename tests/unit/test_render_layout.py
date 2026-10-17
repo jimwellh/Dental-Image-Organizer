@@ -1,8 +1,14 @@
 import numpy as np
 import pytest
 
+from dental_image_organizer.core import imageio
 from dental_image_organizer.core import transform as tf
-from dental_image_organizer.core.layout import fit_strip_height, render_sequence
+from dental_image_organizer.core.color import Curve, LabCurves
+from dental_image_organizer.core.layout import (
+    MAX_SEQUENCE_PIXELS,
+    fit_strip_height,
+    render_sequence,
+)
 from dental_image_organizer.core.render import coverage_mask, render
 from support.synthetic import make_scene
 
@@ -48,6 +54,34 @@ def test_two_times_downscale_is_antialiased() -> None:
 
     # Exactly 2x is where an unfiltered warp degenerates to point sampling.
     assert np.abs(half.astype(int) - 128).max() < 20
+
+
+def test_color_curves_leave_the_uncovered_border_black() -> None:
+    gray = np.full((100, 100, 3), 120, np.uint8)
+    shift = tf.to_normalized(tf.translation(50, 0), 100, 100)
+    # End offsets like a real fit: lifted shadows, a little greener and warmer.
+    curves = LabCurves(
+        (
+            Curve((10.0, 90.0), (18.0, 98.0)),
+            Curve((-50.0, 50.0), (-53.0, 47.0)),
+            Curve((-50.0, 50.0), (-44.0, 56.0)),
+        )
+    )
+
+    out = render(gray, shift, (100, 100), curves=curves)
+
+    assert (out[:, :50] == 0).all()
+    assert np.abs(out[:, 60:].astype(int) - 120).min() > 5
+
+
+def test_render_accepts_a_source_beyond_the_warp_limit() -> None:
+    # cv2.remap rejects Lanczos sources with a side of 32767 px or more.
+    wide = np.full((2, 32800, 3), 200, np.uint8)
+
+    out = render(wide, tf.identity(), (30000, 2))
+
+    assert out.shape == (2, 30000, 3)
+    assert np.abs(out[:, 10:-10].astype(int) - 200).max() <= 2
 
 
 def test_coverage_mask_marks_only_covered_pixels() -> None:
@@ -102,6 +136,18 @@ def test_fit_strip_height_honours_both_limits() -> None:
     assert fit_strip_height(sizes) == 100
     assert fit_strip_height(sizes, max_pixels=20_000) == 66
     assert fit_strip_height(sizes, gap_px=4, max_width=200) == 42
+
+
+def test_sequence_cap_keeps_the_strip_readable_by_the_decoder() -> None:
+    # Eleven 2x-scaled 12 MP frames: the JPEG width limit alone leaves 65483 x 4465 = 292 MP.
+    frames = [(8064, 6048)] * 11
+
+    height = fit_strip_height(
+        frames, max_width=imageio.MAX_JPEG_DIMENSION, max_pixels=MAX_SEQUENCE_PIXELS
+    )
+
+    width = sum(round(w * height / h) for w, h in frames)
+    assert width * height <= imageio.MAX_PIXELS
 
 
 def test_empty_sequence_is_rejected() -> None:

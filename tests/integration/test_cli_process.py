@@ -3,6 +3,7 @@ import os
 import unicodedata
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -210,35 +211,118 @@ def test_unwritable_output_folder_is_an_error_not_a_traceback(
     assert "error:" in result.output
 
 
+def test_unexpected_error_in_one_photo_fails_only_that_photo(
+    case_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_render_edit = headless.render_edit
+    calls = 0
+
+    def render_edit_failing_once(*args: Any, **kwargs: Any) -> np.ndarray:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise MemoryError("Unable to allocate 1.10 GiB for an array")
+        return real_render_edit(*args, **kwargs)
+
+    monkeypatch.setattr(headless, "render_edit", render_edit_failing_once)
+    out = tmp_path / "out"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "process",
+            str(case_dir / "IMG_0001.jpg"),
+            str(case_dir / "IMG_0002.jpg"),
+            "--reference",
+            str(case_dir / "reference.jpg"),
+            "--out",
+            str(out),
+            "--patient",
+            "A",
+            "--title",
+            "B",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert "IMG_0001.jpg: " in result.output
+    assert "MemoryError" in result.output
+    # The failed photo leaves no file; the next photo and the sequence are still written.
+    assert sorted(p.name for p in out.iterdir()) == [
+        "A_B_20261016_0900.jpg",
+        "A_B_20261016_1430.jpg",
+        f"A_B_Procedure_{TODAY}.jpg",
+    ]
+    assert Image.open(out / f"A_B_Procedure_{TODAY}.jpg").size == (2 * 1200, 800)
+
+
+def test_output_beyond_the_jpeg_limit_is_an_error_before_writing(tmp_path: Path) -> None:
+    wide = tmp_path / "wide.png"
+    Image.fromarray(np.full((4, 32751, 3), 128, np.uint8)).save(wide)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "process",
+            str(wide),
+            "--reference",
+            str(wide),
+            "--out",
+            str(tmp_path / "out"),
+            "--patient",
+            "A",
+            "--title",
+            "B",
+            "--output-scale",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert "at most 65500 px" in result.output
+    assert not (tmp_path / "out").exists()
+
+
 @pytest.mark.usefixtures("debug_logging")
-def test_alignment_debug_events_name_the_photo(case_dir: Path, tmp_path: Path) -> None:
+def test_debug_events_carry_the_photo_position(case_dir: Path, tmp_path: Path) -> None:
     # capture_logs() swaps the processor chain, so contextvars are merged explicitly here.
     with capture_logs(processors=[structlog.contextvars.merge_contextvars]) as logs:
         run_procedure(
             case_dir / "reference.jpg",
-            [case_dir / "IMG_0001.jpg"],
+            [case_dir / "IMG_0001.jpg", case_dir / "IMG_0002.jpg"],
             tmp_path / "out",
             patient="A",
             title="B",
         )
 
     events = [entry for entry in logs if entry["event"] == "align"]
-    assert [entry.get("source") for entry in events] == ["IMG_0001.jpg"]
+    assert [entry.get("photo") for entry in events] == [1, 2]
 
 
 @pytest.mark.usefixtures("debug_logging")
-def test_unreadable_photo_log_omits_the_patient_folder(case_dir: Path, tmp_path: Path) -> None:
+def test_logs_and_messages_never_name_the_patient(case_dir: Path, tmp_path: Path) -> None:
+    # Patient folders and re-processed exports put the patient's name into every path.
+    folder = tmp_path / "Alex Wang"
+    folder.mkdir()
+    reference = folder / "Alex Wang pre-op.jpg"
+    Image.open(case_dir / "reference.jpg").save(reference, quality=92)  # drops the EXIF time
+    photo = folder / "Alex Wang_implant 16_20261016_1430.jpg"
+    photo.write_bytes((case_dir / "IMG_0001.jpg").read_bytes())
     # A directory with a photo's name makes read_bytes() raise an OSError on every OS.
-    unreadable = tmp_path / "Alex Wang" / "IMG_0009.jpg"
-    unreadable.mkdir(parents=True)
+    unreadable = folder / "Alex Wang_implant 16_20261016_1431.jpg"
+    unreadable.mkdir()
 
-    with capture_logs() as logs:
+    with capture_logs(processors=[structlog.contextvars.merge_contextvars]) as logs:
         report = run_procedure(
-            case_dir / "reference.jpg", [unreadable], tmp_path / "out", patient="A", title="B"
+            reference, [photo, unreadable], tmp_path / "out", patient="Alex Wang", title="B"
         )
 
-    assert [photo.status for photo in report.photos] == ["failed"]
-    events = [entry for entry in logs if entry["event"] == "photo_unreadable"]
-    assert len(events) == 1
-    assert events[0]["source"] == "IMG_0009.jpg"
-    assert "Alex Wang" not in str(events[0]["error"])
+    by_event = {entry["event"]: entry for entry in logs}
+    assert by_event["capture_time_from_file"]["photo"] == 0
+    assert by_event["align"]["photo"] == 1
+    assert by_event["photo_unreadable"]["photo"] == 2
+    assert [p.status for p in report.photos] == ["ok", "failed"]
+    assert all("Alex Wang" not in repr(entry) for entry in logs)
+    assert "Alex Wang" not in str(report.photos[1].message)

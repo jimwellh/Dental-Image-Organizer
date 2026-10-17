@@ -18,6 +18,9 @@ from dental_image_organizer.core.masks import BoolMask
 # Milder shrinks deliberately keep a single Lanczos resample for sharpness; they can fold detail
 # near Nyquist, where iPhone optics leave little energy.
 MAX_WARP_DOWNSCALE = 0.8
+# cv2.remap, which warpPerspective runs for Lanczos, asserts that each side of the source is
+# below SHRT_MAX (32767); a larger source is shrunk to fit before the warp.
+MAX_WARP_SOURCE_SIDE = 32766
 
 
 def render(
@@ -33,8 +36,10 @@ def render(
     out_w, out_h = output_size
     h_px = tf.to_pixel(transform, image.shape[1], out_w)
     scale = float(np.sqrt(abs(np.linalg.det(h_px[:2, :2]))))
-    if scale < MAX_WARP_DOWNSCALE:
-        size = (max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale)))
+    fit = MAX_WARP_SOURCE_SIDE / max(image.shape[:2])
+    if scale < MAX_WARP_DOWNSCALE or fit < 1.0:
+        shrink = min(scale, fit)
+        size = (max(1, round(image.shape[1] * shrink)), max(1, round(image.shape[0] * shrink)))
         image = cast(RGBImage, cv2.resize(image, size, interpolation=cv2.INTER_AREA))
         h_px = tf.to_pixel(transform, image.shape[1], out_w)
     warped = cast(
@@ -48,7 +53,15 @@ def render(
             borderValue=(0, 0, 0),
         ),
     )
-    return apply_lab_curves(warped, curves) if curves is not None else warped
+    if curves is None:
+        return warped
+    graded = apply_lab_curves(warped, curves)
+    if border_mode == cv2.BORDER_CONSTANT:
+        # Curves keep their end offsets below the fitted range, so they would tint the black
+        # fill outside the photo; that fill is not photo content and stays black.
+        covered = coverage_mask((image.shape[1], image.shape[0]), transform, output_size)
+        graded[~covered] = 0
+    return graded
 
 
 def coverage_mask(
