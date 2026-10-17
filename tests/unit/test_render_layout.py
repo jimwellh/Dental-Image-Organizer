@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from dental_image_organizer.core import transform as tf
-from dental_image_organizer.core.layout import render_sequence
+from dental_image_organizer.core.layout import fit_strip_height, render_sequence
 from dental_image_organizer.core.render import coverage_mask, render
 from support.synthetic import make_scene
 
@@ -86,6 +86,22 @@ def test_sequence_shrinks_to_fit_a_maximum_width() -> None:
     strip = render_sequence(frames, gap_px=4, max_width=200)
 
     assert strip.shape == (42, 197, 3)
+
+
+def test_sequence_shrinks_to_fit_a_maximum_pixel_count() -> None:
+    frames = [np.zeros((100, 150, 3), np.uint8)] * 3
+
+    strip = render_sequence(frames, max_pixels=20_000)
+
+    assert strip.shape == (66, 297, 3)  # 297 x 66 = 19,602 px; height 67 would be 20,100
+
+
+def test_fit_strip_height_honours_both_limits() -> None:
+    sizes = [(150, 100)] * 3
+
+    assert fit_strip_height(sizes) == 100
+    assert fit_strip_height(sizes, max_pixels=20_000) == 66
+    assert fit_strip_height(sizes, gap_px=4, max_width=200) == 42
 
 
 def test_empty_sequence_is_rejected() -> None:

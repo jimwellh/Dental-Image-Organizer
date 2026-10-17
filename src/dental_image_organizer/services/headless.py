@@ -18,7 +18,12 @@ from dental_image_organizer.core.imageio import (
     decode,
     encode_jpeg,
 )
-from dental_image_organizer.core.layout import render_sequence
+from dental_image_organizer.core.layout import (
+    MAX_SEQUENCE_PIXELS,
+    fit_strip_height,
+    render_sequence,
+    scale_to_height,
+)
 from dental_image_organizer.core.naming import (
     photo_filename,
     sanitize_component,
@@ -89,7 +94,17 @@ def run_procedure(
         encode_jpeg(reference_image, reference.metadata),
     )
 
-    frames: list[tuple[datetime, RGBImage]] = [(reference_time, reference_image)]
+    # Every output shares `size`, so shrinking each frame as it arrives keeps the frames held for
+    # the sequence within the same 1 GB budget instead of holding every full-size render until
+    # the end. The count is the most frames this batch can produce (skips only reduce it).
+    strip_height = fit_strip_height(
+        [size] * (1 + len(photo_paths)),
+        max_width=MAX_JPEG_DIMENSION,
+        max_pixels=MAX_SEQUENCE_PIXELS,
+    )
+    frames: list[tuple[datetime, RGBImage]] = [
+        (reference_time, scale_to_height(reference_image, strip_height))
+    ]
     outcomes: list[PhotoOutcome] = []
     for path in photo_paths:
         # Alignment lives in core/, which must not know about photos; binding here tags its
@@ -120,7 +135,7 @@ def run_procedure(
                 photo_filename(patient, title, when),
                 encode_jpeg(image, photo.metadata),
             )
-            frames.append((when, image))
+            frames.append((when, scale_to_height(image, strip_height)))
             notes = [m for m in (edit.align.message, MTIME_WARNING if from_file else None) if m]
             outcomes.append(
                 PhotoOutcome(
@@ -140,7 +155,13 @@ def run_procedure(
         out_dir,
         taken,
         sequence_filename(patient, title, today or date.today()),
-        encode_jpeg(render_sequence([image for _, image in frames], max_width=MAX_JPEG_DIMENSION)),
+        encode_jpeg(
+            render_sequence(
+                [image for _, image in frames],
+                max_width=MAX_JPEG_DIMENSION,
+                max_pixels=MAX_SEQUENCE_PIXELS,
+            )
+        ),
     )
     return ProcedureReport(reference_output, outcomes, sequence_output)
 

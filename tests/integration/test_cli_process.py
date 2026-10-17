@@ -12,6 +12,7 @@ from structlog.testing import capture_logs
 from typer.testing import CliRunner
 
 from dental_image_organizer.cli import app
+from dental_image_organizer.services import headless
 from dental_image_organizer.services.headless import run_procedure
 from support.scenarios import about_center, make_pair
 from support.synthetic import make_scene
@@ -96,6 +97,21 @@ def test_output_scale_enlarges_every_output(case_dir: Path, tmp_path: Path) -> N
     assert result.exit_code == 0, result.output
     single = Image.open(tmp_path / "out" / "Alex Wang_implant 16_20261016_1430.jpg")
     assert single.size == (1800, 1200)
+
+
+def test_sequence_respects_the_pixel_cap(
+    case_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(headless, "MAX_SEQUENCE_PIXELS", 2_000_000)
+
+    result = _invoke(case_dir, tmp_path / "out")
+
+    assert result.exit_code == 0, result.output
+    sequence = Image.open(tmp_path / "out" / f"Alex Wang_implant 16_Procedure_{TODAY}.jpg")
+    assert sequence.width * sequence.height <= 2_000_000
+    assert sequence.height < 800
+    single = Image.open(tmp_path / "out" / "Alex Wang_implant 16_20261016_1430.jpg")
+    assert single.size == (1200, 800)
 
 
 def test_existing_files_are_never_overwritten(case_dir: Path, tmp_path: Path) -> None:

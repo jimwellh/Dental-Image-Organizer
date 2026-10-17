@@ -118,6 +118,9 @@ The drop zone accepts individual files and whole folders, recursively. Accepted 
      are `intra_op`. Photos captured after `D0` are `post_op`.
 6. **Sequence.** The user selects 2–10 photos; the default is all photos in capture order. The
    app renders a horizontal, seamless, equal-height sequence image.
+   - The sequence image is capped at 1 GB uncompressed (333,333,333 RGB pixels) and 65,500 px
+     wide (the JPEG limit). A longer or larger series is scaled down to fit; individual photos
+     stay at full output size.
 7. **Export.** One click writes:
    - all processed individual photos,
    - the sequence image,
