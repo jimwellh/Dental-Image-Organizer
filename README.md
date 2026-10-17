@@ -3,8 +3,9 @@
 Automated alignment, color matching, and collage generation for clinical intraoral photos.
 It runs locally on the dentist's Mac.
 
-> **Status: design phase.** The technical design is complete. Implementation has not started yet.
-> See the [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
+> **Status: early development.** The procedure pipeline is available as a command-line tool
+> (`dio process`); the app UI is not built yet. See the
+> [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
 
 ## What it does
 
@@ -67,6 +68,29 @@ the launcher costs nothing.
 - **Frontend:** React, TypeScript, Vite, Tailwind CSS.
 - **Distribution:** PyPI + `uv`.
 - **CI:** GitHub Actions.
+
+## Development
+
+Requirements: [uv](https://docs.astral.sh/uv/). It provisions Python 3.12.
+
+```sh
+uv sync                  # install dependencies
+uv run pytest            # tests; golden tests run only when local_fixtures/ exists
+uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports
+```
+
+Process one procedure case from the command line:
+
+```sh
+uv run dio process IMG_0002.HEIC IMG_0003.HEIC --reference reference.HEIC \
+  --out export --patient "Alex Wang" --title "implant 16"
+```
+
+### Golden photos (local only)
+
+Real, de-identified photos for tuning go in `local_fixtures/procedure/<case>/`: a
+`reference.<ext>` plus that case's other photos. The folder is gitignored. Run
+`uv run pytest tests/golden` to write per-photo metrics to `local_fixtures/reports/`.
 
 ## Disclaimer
 

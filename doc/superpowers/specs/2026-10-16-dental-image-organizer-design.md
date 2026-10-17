@@ -116,6 +116,10 @@ The drop zone accepts individual files and whole folders, recursively. Accepted 
      are `intra_op`. Photos captured after `D0` are `post_op`.
 6. **Sequence.** The user selects 2–10 photos; the default is all photos in capture order. The
    app renders a horizontal, seamless, equal-height sequence image.
+   - The sequence image is capped at 200 MP (600 MB uncompressed), the decoder's own limit
+     (§4.13), so the app can read back every sequence it writes, and at 65,500 px wide (the JPEG
+     limit). A longer or larger series is scaled down to fit; individual photos stay at full
+     output size.
 7. **Export.** One click writes:
    - all processed individual photos,
    - the sequence image,
@@ -609,7 +613,9 @@ Originals are never modified. Each photo's processing result is a small paramete
   least-squares fit on the four output-frame corners).
 - `output_aspect` and `output_size`: the output frame.
   - F1: the reference size × the case's `output_scale` (1, 1.5, or 2; default 1). All photos of a
-    case share it, so the sequence image stays equal-height.
+    case share it, so the sequence image stays equal-height. A scale that would make either side
+    longer than 65,500 px (the JPEG limit) or the output larger than 200 MP (the decoder limit,
+    §4.13) is rejected with `output_too_large` before anything is rendered.
   - F2: the cell size.
 - `detail_ratio` (F1 only): full-resolution photo pixels per reference pixel over the matched
   region (§4.5.1 step 4).

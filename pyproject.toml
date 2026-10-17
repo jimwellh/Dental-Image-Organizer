@@ -1,0 +1,71 @@
+[project]
+name = "dental-image-organizer"
+version = "0.1.0.dev0"
+description = "Local Mac app that aligns, color-matches, and composes clinical intraoral photos."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "jimwellh" }]
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=2.0",
+  "opencv-python-headless>=4.10",
+  "pillow>=11.0",
+  "pi-heif>=1.0",
+  "structlog>=25.1",
+  "typer>=0.15",
+]
+
+[project.scripts]
+dio = "dental_image_organizer.cli:app"
+dental-image-organizer = "dental_image_organizer.cli:app"
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.120",
+  "import-linter>=2.1",
+  "mypy>=1.15",
+  "pillow-heif>=0.21",
+  "pytest>=8.3",
+  "ruff>=0.9",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dental_image_organizer"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["doc"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["pi_heif", "pi_heif.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "-ra --strict-markers"
+markers = ["golden: needs real photos in local_fixtures/ (skipped when absent)"]
+
+[tool.importlinter]
+root_package = "dental_image_organizer"
+
+[[tool.importlinter.contracts]]
+name = "core is pure: no services or CLI imports"
+type = "forbidden"
+source_modules = ["dental_image_organizer.core"]
+forbidden_modules = ["dental_image_organizer.services", "dental_image_organizer.cli"]
