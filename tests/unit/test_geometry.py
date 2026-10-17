@@ -4,15 +4,18 @@ import pytest
 
 from dental_image_organizer.core import transform as tf
 from dental_image_organizer.core.geometry import (
+    ANALYSIS_LONG_EDGE,
     MAX_ZOOM,
     estimate_level,
     flip_matrix,
     flip_pixels,
     normalize_view,
 )
+from dental_image_organizer.core.imageio import resize_long_edge
 from dental_image_organizer.core.masks import tooth_mask
 from dental_image_organizer.core.render import coverage_mask, render
 from dental_image_organizer.core.slots import DEFAULT_FLIPS, FLIPS, SLOTS, Flip, Slot
+from support.synthetic import ENAMEL_RGB, GUM_RGB, _smooth_noise
 from support.views import VIEW_SIZE, make_view
 
 CELL = (1200, 800)
@@ -32,6 +35,40 @@ def test_occlusion_falls_back_to_the_darkest_row_when_arches_touch() -> None:
     blurred = cv2.GaussianBlur(make_view("occlusion_front", 4, angle=6.0), (0, 0), 4)
 
     assert estimate_level(blurred, "occlusion_front").angle_deg == pytest.approx(-6.0, abs=1.0)
+
+
+def test_occlusion_reads_the_darkest_row_when_no_column_has_an_opening() -> None:
+    scene = _touching_arches(9, angle=-8.0)
+    small, _ = resize_long_edge(scene, ANALYSIS_LONG_EDGE)
+    # Guard: with no opening anywhere, every boundary point comes from the darkest row.
+    columns = (np.flatnonzero(column) for column in tooth_mask(small).T)
+    assert not any(np.any(np.diff(rows) > 1) for rows in columns)
+
+    level = estimate_level(scene, "occlusion_front")
+
+    assert level.confident
+    assert level.angle_deg == pytest.approx(8.0, abs=1.0)
+
+
+def _touching_arches(seed: int, *, angle: float) -> np.ndarray:
+    """Both arches as one textured tooth block; the shadow where they meet is still enamel.
+
+    The texture puts each column's brightest row at random, so only the darkest row lines up.
+    """
+    w, h = VIEW_SIZE
+    rng = np.random.default_rng(seed)
+    field = sum(a * _smooth_noise(rng, h, w, c) for c, a in ((200, 0.5), (40, 0.3), (8, 0.2)))
+    field = (field - field.mean()) / (field.std() + 1e-6)
+    img = GUM_RGB + field[..., None] * np.array([16, 10, 10], np.float32)
+    enamel = ENAMEL_RGB + field[..., None] * np.array([9, 9, 11], np.float32)
+    top, bottom, left, right = int(0.27 * h), int(0.73 * h), int(0.1 * w), int(0.9 * w)
+    img[top:bottom, left:right] = enamel[top:bottom, left:right]
+    img[h // 2 - 12 : h // 2 + 12, left:right] *= 0.8
+    upright = np.clip(img, 0, 255).astype(np.uint8)
+    m = cv2.getRotationMatrix2D((w / 2, h / 2), -angle, 1.0)
+    return cv2.warpAffine(
+        upright, m, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+    )
 
 
 def test_view_without_teeth_is_left_unrotated() -> None:
