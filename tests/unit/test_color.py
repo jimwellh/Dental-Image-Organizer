@@ -4,7 +4,7 @@ import pytest
 from dental_image_organizer.core.color import (
     CHANNEL_LIMITS,
     LabCurves,
-    apply_lab_curves,
+    apply_lab_transform,
     fit_lab_curves,
     from_lab,
     to_lab,
@@ -36,7 +36,7 @@ def test_identical_images_need_no_correction(reference: np.ndarray) -> None:
 
     curves = fit_lab_curves(reference, reference, valid, tooth_mask(reference))
 
-    assert _delta_e(apply_lab_curves(reference, curves), reference).mean() < 0.5
+    assert _delta_e(apply_lab_transform(reference, curves), reference).mean() < 0.5
 
 
 def test_known_tone_and_white_balance_shift_is_undone(reference: np.ndarray) -> None:
@@ -46,7 +46,7 @@ def test_known_tone_and_white_balance_shift_is_undone(reference: np.ndarray) -> 
 
     curves = fit_lab_curves(photo, reference, valid, tooth_mask(reference))
 
-    assert _delta_e(apply_lab_curves(photo, curves), reference).mean() < 3
+    assert _delta_e(apply_lab_transform(photo, curves), reference).mean() < 3
 
 
 @pytest.mark.parametrize("share", [0.2, 0.4])
@@ -62,7 +62,7 @@ def test_surgical_change_does_not_drag_the_fit(reference: np.ndarray, share: flo
 
     curves = fit_lab_curves(photo, reference, valid, tooth_mask(reference))
 
-    corrected = apply_lab_curves(photo, curves)
+    corrected = apply_lab_transform(photo, curves)
     assert _delta_e(corrected, reference)[~patch].mean() < 3
 
 
@@ -74,7 +74,7 @@ def test_only_valid_pixels_are_used(reference: np.ndarray) -> None:
 
     curves = fit_lab_curves(photo, reference, valid, tooth_mask(reference))
 
-    corrected = apply_lab_curves(photo, curves)
+    corrected = apply_lab_transform(photo, curves)
     assert _delta_e(corrected, reference)[valid].mean() < 3
 
 
@@ -117,7 +117,7 @@ def test_chunked_apply_matches_single_pass(reference: np.ndarray) -> None:
     valid = np.ones(reference.shape[:2], bool)
     curves = fit_lab_curves(_shifted(reference), reference, valid, None)
 
-    chunked = apply_lab_curves(reference, curves, chunk_rows=37)
-    single = apply_lab_curves(reference, curves, chunk_rows=10_000)
+    chunked = apply_lab_transform(reference, curves, chunk_rows=37)
+    single = apply_lab_transform(reference, curves, chunk_rows=10_000)
 
     np.testing.assert_array_equal(chunked, single)
