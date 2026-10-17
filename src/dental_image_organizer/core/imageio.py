@@ -188,11 +188,23 @@ def _parse_capture_time(value: object, offset: object) -> datetime | None:
         return captured
     sign = 1 if match.group(1) == "+" else -1
     delta = timedelta(hours=int(match.group(2)), minutes=int(match.group(3)))
-    return captured.replace(tzinfo=timezone(sign * delta))
+    try:
+        return captured.replace(tzinfo=timezone(sign * delta))
+    except ValueError:
+        # An offset of 24 h or more is a broken tag; the wall-clock time is still usable.
+        return captured
+
+
+def _to_8bit(img: Image.Image) -> Image.Image:
+    # Pillow's convert() clips 16-bit samples at 255 instead of scaling them.
+    if img.mode not in ("I", "I;16", "I;16B", "I;16L"):
+        return img
+    samples = np.asarray(img, dtype=np.float64) / 257.0
+    return Image.fromarray(np.clip(np.rint(samples), 0, 255).astype(np.uint8))
 
 
 def _to_srgb(img: Image.Image, icc: bytes | None) -> Image.Image:
-    rgb = img if img.mode == "RGB" else img.convert("RGB")
+    rgb = img if img.mode == "RGB" else _to_8bit(img).convert("RGB")
     if not icc:
         return rgb
     try:

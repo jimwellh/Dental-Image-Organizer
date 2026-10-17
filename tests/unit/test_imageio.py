@@ -103,6 +103,12 @@ def test_capture_time_without_offset_is_naive() -> None:
     assert decoded.metadata.captured_at == datetime(2026, 10, 16, 14, 30, 12)
 
 
+def test_out_of_range_offset_keeps_the_naive_capture_time() -> None:
+    decoded = imageio.decode(_jpeg(Image.fromarray(_gradient()), _exif(offset="+24:00")))
+
+    assert decoded.metadata.captured_at == datetime(2026, 10, 16, 14, 30, 12)
+
+
 @pytest.mark.parametrize("orientation", range(1, 9))
 def test_every_exif_orientation_is_made_upright(orientation: int) -> None:
     upright = np.zeros((40, 60, 3), np.uint8)
@@ -170,6 +176,15 @@ def test_non_rgb_png_modes_decode_to_three_channel_uint8(mode: str) -> None:
 
     assert rgb.dtype == np.uint8
     assert rgb.shape == (48, 64, 3)
+
+
+def test_sixteen_bit_png_is_scaled_not_clipped() -> None:
+    buf = io.BytesIO()
+    Image.fromarray(np.full((8, 8), 40000, np.uint16)).save(buf, format="PNG")
+
+    rgb = imageio.decode(buf.getvalue()).rgb
+
+    assert np.abs(rgb.astype(int) - 156).max() <= 1  # 40000 / 257 = 155.6
 
 
 def test_heic_decodes_with_metadata() -> None:
