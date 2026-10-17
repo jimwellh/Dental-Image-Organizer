@@ -488,7 +488,7 @@ After alignment, pixel correspondences exist:
 mirror image get nearly the same embedding. The three left/right slot pairs are close to mirror
 images of each other, so a single 9-way head would confuse them. The classifier therefore splits
 the decision into "which view group" and "which side". The reference app's side model uses the
-same original-minus-mirror feature (research doc); this is an independent re-implementation.
+same original-minus-mirror feature; this is an independent re-implementation.
 
 - **Slot groups** (6):
   - `upper_buccal` = {`upper_right`, `upper_left`};
