@@ -98,6 +98,16 @@ def test_output_at_the_jpeg_limit_is_accepted() -> None:
     assert output_size((32750, 10), 2.0) == (65500, 20)
 
 
+def test_output_beyond_the_decoder_pixel_limit_is_rejected() -> None:
+    # A 61 MP camera reference at 2x: 18000 x 13400 = 241 MP, which decode() cannot read back.
+    with pytest.raises(OutputTooLargeError):
+        output_size((9000, 6700), 2.0)
+
+
+def test_48_mp_iphone_reference_at_2x_is_accepted() -> None:
+    assert output_size((8064, 6048), 2.0) == (16128, 12096)  # 195 MP
+
+
 def test_render_reference_upscales_the_reference() -> None:
     reference = make_scene(53, 600, 400)
 

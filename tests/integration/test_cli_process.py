@@ -257,6 +257,59 @@ def test_unexpected_error_in_one_photo_fails_only_that_photo(
     assert Image.open(out / f"A_B_Procedure_{TODAY}.jpg").size == (2 * 1200, 800)
 
 
+def test_unexpected_decode_error_fails_only_that_photo(
+    case_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_decode = headless.decode
+    bad = (case_dir / "IMG_0001.jpg").read_bytes()
+
+    def decode_failing_on_one_photo(data: bytes) -> Any:
+        if data == bad:
+            raise MemoryError  # decoding a 48 MP HEIC holds several full-size copies
+        return real_decode(data)
+
+    monkeypatch.setattr(headless, "decode", decode_failing_on_one_photo)
+
+    report = run_procedure(
+        case_dir / "reference.jpg",
+        [case_dir / "IMG_0001.jpg", case_dir / "IMG_0002.jpg"],
+        tmp_path / "out",
+        patient="A",
+        title="B",
+    )
+
+    assert [p.status for p in report.photos] == ["failed", "ok"]
+    assert report.photos[0].message == "Unexpected MemoryError"
+    assert report.sequence_output.exists()
+
+
+def test_os_error_without_a_path_keeps_its_message(
+    case_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_encode = headless.encode_jpeg
+    calls = 0
+
+    def encode_failing_on_the_first_photo(*args: Any, **kwargs: Any) -> bytes:
+        nonlocal calls
+        calls += 1
+        if calls == 2:  # call 1 encodes the reference
+            raise OSError("broken data stream when writing image file")
+        return real_encode(*args, **kwargs)
+
+    monkeypatch.setattr(headless, "encode_jpeg", encode_failing_on_the_first_photo)
+
+    report = run_procedure(
+        case_dir / "reference.jpg",
+        [case_dir / "IMG_0001.jpg"],
+        tmp_path / "out",
+        patient="A",
+        title="B",
+    )
+
+    assert [p.status for p in report.photos] == ["failed"]
+    assert report.photos[0].message == "broken data stream when writing image file"
+
+
 def test_output_beyond_the_jpeg_limit_is_an_error_before_writing(tmp_path: Path) -> None:
     wide = tmp_path / "wide.png"
     Image.fromarray(np.full((4, 32751, 3), 128, np.uint8)).save(wide)
@@ -281,7 +334,7 @@ def test_output_beyond_the_jpeg_limit_is_an_error_before_writing(tmp_path: Path)
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit), result.exception
-    assert "at most 65500 px" in result.output
+    assert "65500 px per side" in result.output
     assert not (tmp_path / "out").exists()
 
 

@@ -614,8 +614,8 @@ Originals are never modified. Each photo's processing result is a small paramete
 - `output_aspect` and `output_size`: the output frame.
   - F1: the reference size × the case's `output_scale` (1, 1.5, or 2; default 1). All photos of a
     case share it, so the sequence image stays equal-height. A scale that would make either side
-    longer than 65,500 px (the JPEG limit) is rejected with `output_too_large` before anything is
-    rendered.
+    longer than 65,500 px (the JPEG limit) or the output larger than 200 MP (the decoder limit,
+    §4.13) is rejected with `output_too_large` before anything is rendered.
   - F2: the cell size.
 - `detail_ratio` (F1 only): full-resolution photo pixels per reference pixel over the matched
   region (§4.5.1 step 4).

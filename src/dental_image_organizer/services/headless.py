@@ -159,6 +159,11 @@ def _process_photo(
     except OSError as exc:
         log.error("photo_unreadable", error=_os_error_message(exc))
         return PhotoOutcome(path, "failed", message=_os_error_message(exc)), None
+    except Exception as exc:
+        # Decoders parse untrusted bytes and hold several full-size copies, so a plugin error
+        # or a MemoryError here is as likely as in rendering and must not abort the batch.
+        log.exception("photo_unreadable")
+        return PhotoOutcome(path, "failed", message=_unexpected_message(exc)), None
     try:
         when, from_file = _captured_at(photo, path)
         edit = compute_edit(photo.rgb, prepared)
@@ -174,9 +179,7 @@ def _process_photo(
         # One bad photo never aborts a batch: an OpenCV assertion or a MemoryError on a large
         # render fails only this photo. The trace is logged for fixing the cause.
         log.exception("photo_failed")
-        detail = str(exc).strip()
-        message = f"Unexpected {type(exc).__name__}" + (f": {detail}" if detail else "")
-        return PhotoOutcome(path, "failed", message=message), None
+        return PhotoOutcome(path, "failed", message=_unexpected_message(exc)), None
     notes = [m for m in (edit.align.message, MTIME_WARNING if from_file else None) if m]
     outcome = PhotoOutcome(
         path,
@@ -194,8 +197,16 @@ def _load(path: Path) -> DecodedImage:
 
 
 def _os_error_message(exc: OSError) -> str:
-    # str(exc) embeds the full path, and patient folders and exports carry patient names.
+    # str(exc) embeds the path when the error carries one, and patient folders and exports
+    # carry patient names. Pillow's encoder errors carry no path and keep their message.
+    if exc.filename is None and exc.filename2 is None:
+        return str(exc) or type(exc).__name__
     return exc.strerror or type(exc).__name__
+
+
+def _unexpected_message(exc: Exception) -> str:
+    detail = str(exc).strip()
+    return f"Unexpected {type(exc).__name__}" + (f": {detail}" if detail else "")
 
 
 def _captured_at(image: DecodedImage, path: Path) -> tuple[datetime, bool]:

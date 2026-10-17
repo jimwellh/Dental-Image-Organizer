@@ -14,7 +14,12 @@ from dental_image_organizer.core.align import (
     align_to_reference,
 )
 from dental_image_organizer.core.color import LabCurves, fit_lab_curves
-from dental_image_organizer.core.imageio import MAX_JPEG_DIMENSION, RGBImage, resize_long_edge
+from dental_image_organizer.core.imageio import (
+    MAX_JPEG_DIMENSION,
+    MAX_PIXELS,
+    RGBImage,
+    resize_long_edge,
+)
 from dental_image_organizer.core.render import coverage_mask, render
 from dental_image_organizer.errors import OutputTooLargeError
 
@@ -47,12 +52,14 @@ def output_size(reference_size: tuple[int, int], output_scale: float) -> tuple[i
         raise ValueError(f"output_scale must be one of {OUTPUT_SCALES}, got {output_scale}")
     w, h = reference_size
     size = round(w * output_scale), round(h * output_scale)
-    # Checked before anything is rendered or written: encode_jpeg would otherwise fail only
-    # after the reference and every photo had been warped.
-    if max(size) > MAX_JPEG_DIMENSION:
+    # Checked before anything is rendered or written: encode_jpeg fails above the JPEG side
+    # limit only after every warp, and decode() rejects more than MAX_PIXELS, so a larger
+    # export could never be imported again.
+    if max(size) > MAX_JPEG_DIMENSION or size[0] * size[1] > MAX_PIXELS:
         raise OutputTooLargeError(
-            f"The output would be {size[0]}x{size[1]} px, but JPEG allows at most "
-            f"{MAX_JPEG_DIMENSION} px per side; use a smaller output scale or reference."
+            f"The output would be {size[0]}x{size[1]} px; outputs are limited to "
+            f"{MAX_JPEG_DIMENSION} px per side (JPEG) and {MAX_PIXELS // 1_000_000} MP "
+            "(what the app can read back). Use a smaller output scale or reference."
         )
     return size
 
