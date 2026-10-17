@@ -12,10 +12,11 @@ from dental_image_organizer.core.color import LabCurves, apply_lab_curves
 from dental_image_organizer.core.imageio import RGBImage
 from dental_image_organizer.core.masks import BoolMask
 
-# warpPerspective samples without a low-pass filter, so a warp that shrinks by more than this
-# would alias fine texture. Such inputs are first area-averaged to about the output scale,
-# leaving the warp to rotate and shift at roughly 1:1.
-MAX_WARP_DOWNSCALE = 0.5
+# warpPerspective samples without a low-pass filter, so a shrinking warp aliases fine texture;
+# at exactly 2x it degenerates to point sampling. Inputs shrunk by more than 1.25x are first
+# area-averaged to about the output scale, leaving the warp to rotate and shift at roughly 1:1.
+# Milder shrinks keep a single Lanczos resample, which preserves sharpness.
+MAX_WARP_DOWNSCALE = 0.8
 
 
 def render(

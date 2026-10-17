@@ -40,6 +40,16 @@ def test_strong_downscale_is_antialiased() -> None:
     assert np.abs(small.astype(int) - 128).max() < 20
 
 
+def test_two_times_downscale_is_antialiased() -> None:
+    stripes = np.zeros((1000, 1000, 3), np.uint8)
+    stripes[:, ::2] = 255
+
+    half = render(stripes, tf.identity(), (500, 500))
+
+    # Exactly 2x is where an unfiltered warp degenerates to point sampling.
+    assert np.abs(half.astype(int) - 128).max() < 20
+
+
 def test_coverage_mask_marks_only_covered_pixels() -> None:
     shift = tf.to_normalized(tf.translation(50, 0), 100, 100)
 
