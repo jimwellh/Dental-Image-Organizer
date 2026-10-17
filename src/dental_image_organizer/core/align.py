@@ -39,6 +39,10 @@ ECC_ITERATIONS = 100
 ECC_EPSILON = 1e-6
 ECC_GAUSS_SIZE = 5
 ECC_MIN_MASK_SHARE = 0.05
+HOMOGRAPHY_MIN_INLIERS = 60
+HOMOGRAPHY_MIN_QUADRANTS = 3
+HOMOGRAPHY_MIN_ECC_GAIN = 0.02
+HOMOGRAPHY_MAX_CORNER_SHIFT = 0.08
 INLIERS_FOR_FULL_CONFIDENCE = 80
 CONFIDENCE_OK = 0.6
 CONFIDENCE_REVIEW = 0.35
@@ -65,6 +69,7 @@ class AlignResult:
     detail_ratio: float
     mirrored: bool
     tight_crop: bool
+    homography_note: str | None  # why the similarity was kept; None when a homography is used
     message: str | None
 
 
@@ -152,6 +157,11 @@ def align_to_reference(photo_rgb: RGBImage, reference: PreparedReference) -> Ali
 
     model: AlignModel = "similarity"
     matrix, cc = similarity, similarity_cc
+    homography, homography_cc, note = _try_homography(
+        estimate, similarity, similarity_cc, reference
+    )
+    if homography is not None:
+        matrix, model, cc = homography, "homography", homography_cc
 
     confidence = float(
         np.clip(
@@ -168,6 +178,7 @@ def align_to_reference(photo_rgb: RGBImage, reference: PreparedReference) -> Ali
         scale=round(working_scale, 3),
         angle=round(params.angle_deg, 2),
         model=model,
+        homography_note=note,
         tight_crop=tight_crop,
         mirrored=estimate.mirrored,
         confidence=round(confidence, 3),
@@ -185,8 +196,69 @@ def align_to_reference(photo_rgb: RGBImage, reference: PreparedReference) -> Ali
         detail_ratio=1.0 / params.scale,
         mirrored=estimate.mirrored,
         tight_crop=tight_crop,
+        homography_note=note,
         message=None if confidence >= CONFIDENCE_OK else "Low alignment confidence.",
     )
+
+
+def homography_gate_failures(
+    homography: tf.Matrix,
+    similarity: tf.Matrix,
+    frame_size: tuple[int, int],
+    *,
+    homography_cc: float,
+    similarity_cc: float,
+) -> list[str]:
+    """Names of the acceptance gates (spec §4.5.1 step 6.3) that `homography` fails."""
+    w, h = frame_size
+    corners = np.array([[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]])
+    failures: list[str] = []
+    if homography_cc - similarity_cc < HOMOGRAPHY_MIN_ECC_GAIN:
+        failures.append("ecc_gain")
+    inverse = tf.invert(homography)
+    denominators = np.hstack([corners, np.ones((4, 1))]) @ inverse[2]
+    photo_corners = tf.map_points(inverse, corners)
+    shift = np.linalg.norm(tf.map_points(similarity, photo_corners) - corners, axis=1)
+    if np.max(shift) > HOMOGRAPHY_MAX_CORNER_SHIFT * w:
+        failures.append("corner_shift")
+    if np.any(denominators <= 0) or not cv2.isContourConvex(
+        photo_corners.astype(np.float32).reshape(-1, 1, 2)
+    ):
+        failures.append("not_convex")
+    return failures
+
+
+def _try_homography(
+    estimate: _Estimate,
+    similarity: tf.Matrix,
+    similarity_cc: float,
+    reference: PreparedReference,
+) -> tuple[tf.Matrix | None, float, str | None]:
+    if estimate.inliers < HOMOGRAPHY_MIN_INLIERS:
+        return None, similarity_cc, "too_few_inliers"
+    if _quadrants(estimate.inlier_ref_points, reference.working) < HOMOGRAPHY_MIN_QUADRANTS:
+        return None, similarity_cc, "poor_coverage"
+    found, _ = cv2.findHomography(
+        estimate.src_points.astype(np.float32),
+        estimate.dst_points.astype(np.float32),
+        cv2.RANSAC,
+        RANSAC_THRESHOLD_PX,
+    )
+    if found is None:
+        return None, similarity_cc, "estimation_failed"
+    initial = tf.scaling(1.0 / reference.working_scale) @ found @ estimate.view.from_full
+    homography = _refine(tf.normalize(initial), estimate.view, reference, cv2.MOTION_HOMOGRAPHY)
+    homography_cc = _ecc_score(homography, estimate.view, reference)
+    failures = homography_gate_failures(
+        homography,
+        similarity,
+        reference.full_size,
+        homography_cc=homography_cc,
+        similarity_cc=similarity_cc,
+    )
+    if failures:
+        return None, similarity_cc, ",".join(failures)
+    return homography, homography_cc, None
 
 
 def _estimate(view: _View, reference: PreparedReference, *, mirrored: bool) -> _Estimate | None:
@@ -341,6 +413,13 @@ def _working_scale(matrix: tf.Matrix, reference: PreparedReference, photo_scale:
     return tf.decompose_similarity(matrix).scale * reference.working_scale / photo_scale
 
 
+def _quadrants(points: FloatPoints, image: RGBImage) -> int:
+    h, w = image.shape[:2]
+    right = points[:, 0] >= w / 2
+    bottom = points[:, 1] >= h / 2
+    return len(set(zip(right.tolist(), bottom.tolist(), strict=True)))
+
+
 def _fallback(photo_rgb: RGBImage, reference: PreparedReference, message: str) -> AlignResult:
     """Center the photo so it covers the reference frame; the user aligns it manually."""
     ph, pw = photo_rgb.shape[:2]
@@ -359,6 +438,7 @@ def _fallback(photo_rgb: RGBImage, reference: PreparedReference, message: str) -
         detail_ratio=1.0 / k,
         mirrored=False,
         tight_crop=False,
+        homography_note=None,
         message=message,
     )
 
