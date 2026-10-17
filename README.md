@@ -12,7 +12,7 @@ It runs locally on the dentist's Mac.
 
 - The dentist edits one pre-op photo on their iPhone, and it becomes the case reference.
 - Intra-op and post-op photos are then automatically:
-  - aligned to the reference (rotation, scale, translation),
+  - aligned to the reference (rotation, scale, translation, and perspective),
   - color-matched to it,
   - cropped to its framing.
 - Output: individual photos plus a horizontal, chronological sequence image.
@@ -23,7 +23,8 @@ It runs locally on the dentist's Mac.
   classifier.
 - Each photo is leveled, flipped where needed (mirror shots), cropped, and color-unified.
 - Output: one seamless composite image.
-- Every drag-to-fix correction teaches the classifier.
+- Every drag-to-fix correction teaches the classifier, and three past sets can teach it before
+  first use.
 
 **Export**
 
@@ -38,9 +39,12 @@ and the user interface opens in your browser. There is no telemetry.
 The only network access is:
 
 - a one-time AI model download, which asks for your consent first;
-- an optional update check against PyPI.
+- an optional update check against PyPI;
+- updates that you start from the app.
 
 ## Planned installation (macOS)
+
+Requires an Apple Silicon Mac with macOS 14 Sonoma or later.
 
 The app is not released yet. Once it is, installation will be one command in Terminal:
 

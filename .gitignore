@@ -13,6 +13,15 @@
 *.HEIF
 *.dng
 *.DNG
+*.tif
+*.TIF
+*.tiff
+*.TIFF
+*.webp
+*.WEBP
+# Case archives bundle original photos.
+*.zip
+*.ZIP
 !tests/fixtures/synthetic/**
 !doc/assets/**
 !frontend/public/**
