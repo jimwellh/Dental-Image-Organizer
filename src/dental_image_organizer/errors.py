@@ -29,3 +29,11 @@ class InvalidNameError(DioError):
 
 class OutputTooLargeError(DioError):
     code = "output_too_large"
+
+
+class ModelUnavailableError(DioError):
+    code = "model_unavailable"
+
+
+class ModelIntegrityError(DioError):
+    code = "model_integrity"

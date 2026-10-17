@@ -501,9 +501,10 @@ same original-minus-mirror feature; this is an independent re-implementation.
   - `occlusion_front`;
   - `lower_buccal` = {`lower_right`, `lower_left`};
   - `lower_occlusal`.
-- **Group head.** scikit-learn `LogisticRegression` (multinomial, `C = 1.0`,
+- **Group head.** scikit-learn `LogisticRegression` (multinomial, `C = 10.0`,
   `class_weight = "balanced"`) on the mirror-symmetric feature `s = (g(x) + g(x̄)) / 2`.
-  Mirroring a photo never changes its group.
+  Mirroring a photo never changes its group. Block-normalized embeddings are short vectors, and
+  at C = 1.0 every probability stayed below 0.5 on the exported model.
 - **Side head.** `LogisticRegression(fit_intercept=False)` on the mirror-antisymmetric feature
   `a = g(x) − g(x̄)`, with labels right / left.
   - Without an intercept, mirroring a photo exactly negates its score.
@@ -675,7 +676,7 @@ never overwritten silently: the export screen offers "Replace previous export" o
 | `dio serve [--port N] [--no-browser] [--detach]` | Start the local server (§4.3) |
 | `dio install-launcher [--uv-path PATH]` / `dio uninstall-launcher` | macOS only: create or remove `~/Applications/Dental Image Organizer.app` (§7.3), and record the absolute `uv` and `dio` paths for in-app updates. Other OSes print "not supported". |
 | `dio process --reference REF --out DIR PHOTOS...` | Headless Feature 1. This is the extension point for future adapters. |
-| `dio composite --out DIR PHOTOS...` | Headless Feature 2 |
+| `dio composite PHOTOS... --out DIR --patient NAME --tag TAG [--order SLOTS] [--baseline SLOT] [--flip SLOT=FLIP]... [--assign FILE=SLOT\|tray]... [--learn] [--download-model]` | Headless Feature 2; `--learn` stores the run as confirmed samples (§3.3 step 7) |
 | `dio export-case CASE_DIR ZIP` / `dio import-case ZIP` | Case archive round trip |
 | `dio --version` | Print the version |
 
