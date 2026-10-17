@@ -78,6 +78,19 @@ def test_only_valid_pixels_are_used(reference: np.ndarray) -> None:
     assert _delta_e(corrected, reference)[valid].mean() < 3
 
 
+def test_invalid_pixels_do_not_affect_the_fit(reference: np.ndarray) -> None:
+    valid = np.ones(reference.shape[:2], bool)
+    valid[:, :400] = False
+    dark, bright = _shifted(reference), _shifted(reference)
+    dark[:, :400] = 0
+    bright[:, :400] = 255
+
+    curves_dark = fit_lab_curves(dark, reference, valid, tooth_mask(reference))
+    curves_bright = fit_lab_curves(bright, reference, valid, tooth_mask(reference))
+
+    assert curves_dark.to_params() == curves_bright.to_params()
+
+
 def test_curve_moves_are_limited_and_monotone(reference: np.ndarray) -> None:
     lab = to_lab(reference)
     lab[..., 0] = np.clip(lab[..., 0] - 50.0, 0, 100)  # far darker than any real exposure error
