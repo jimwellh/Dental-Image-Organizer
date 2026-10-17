@@ -15,7 +15,8 @@ from dental_image_organizer.core.masks import BoolMask
 # warpPerspective samples without a low-pass filter, so a shrinking warp aliases fine texture;
 # at exactly 2x it degenerates to point sampling. Inputs shrunk by more than 1.25x are first
 # area-averaged to about the output scale, leaving the warp to rotate and shift at roughly 1:1.
-# Milder shrinks keep a single Lanczos resample, which preserves sharpness.
+# Milder shrinks deliberately keep a single Lanczos resample for sharpness; they can fold detail
+# near Nyquist, where iPhone optics leave little energy.
 MAX_WARP_DOWNSCALE = 0.8
 
 

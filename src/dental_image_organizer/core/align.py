@@ -152,6 +152,14 @@ def align_to_reference(photo_rgb: RGBImage, reference: PreparedReference) -> Ali
     if not (SCALE_LIMITS[0] <= working_scale <= SCALE_LIMITS[1]) or (
         abs(params.angle_deg) > MAX_ROTATION_DEG
     ):
+        log.debug(
+            "align_rejected",
+            inliers=estimate.inliers,
+            scale=round(working_scale, 3),
+            angle=round(params.angle_deg, 2),
+            tight_crop=tight_crop,
+            mirrored=estimate.mirrored,
+        )
         return _fallback(photo_rgb, reference, "Estimated scale or rotation is implausible.")
     similarity_cc = _ecc_score(similarity, estimate.view, reference)
 

@@ -92,38 +92,46 @@ def run_procedure(
     frames: list[tuple[datetime, RGBImage]] = [(reference_time, reference_image)]
     outcomes: list[PhotoOutcome] = []
     for path in photo_paths:
-        try:
-            photo = _load(path)
-        except UnsupportedFormatError as exc:
-            outcomes.append(PhotoOutcome(path, "skipped", message=str(exc), skip_reason=exc.reason))
-            continue
-        except CorruptImageError as exc:
-            log.error("photo_unreadable", source=path.name, error=str(exc))
-            outcomes.append(PhotoOutcome(path, "failed", message=str(exc)))
-            continue
-        except OSError as exc:
-            # str(exc) embeds the full path, and folders are often named after patients.
-            log.error("photo_unreadable", source=path.name, error=exc.strerror)
-            outcomes.append(PhotoOutcome(path, "failed", message=str(exc)))
-            continue
-        edit = compute_edit(photo.rgb, prepared)
-        image = render_edit(photo.rgb, edit, size)
-        when, from_file = _captured_at(photo, path)
-        output = _write(
-            out_dir, taken, photo_filename(patient, title, when), encode_jpeg(image, photo.metadata)
-        )
-        frames.append((when, image))
-        notes = [m for m in (edit.align.message, MTIME_WARNING if from_file else None) if m]
-        outcomes.append(
-            PhotoOutcome(
-                path,
-                edit.align.status,
-                output,
-                edit.align.confidence,
-                edit.align.model,
-                " ".join(notes) or None,
+        # Alignment lives in core/, which must not know about photos; binding here tags its
+        # debug events with the file name without leaking a patient name or title.
+        with structlog.contextvars.bound_contextvars(source=path.name):
+            try:
+                photo = _load(path)
+            except UnsupportedFormatError as exc:
+                outcomes.append(
+                    PhotoOutcome(path, "skipped", message=str(exc), skip_reason=exc.reason)
+                )
+                continue
+            except CorruptImageError as exc:
+                log.error("photo_unreadable", source=path.name, error=str(exc))
+                outcomes.append(PhotoOutcome(path, "failed", message=str(exc)))
+                continue
+            except OSError as exc:
+                # str(exc) embeds the full path, and folders are often named after patients.
+                log.error("photo_unreadable", source=path.name, error=exc.strerror)
+                outcomes.append(PhotoOutcome(path, "failed", message=str(exc)))
+                continue
+            edit = compute_edit(photo.rgb, prepared)
+            image = render_edit(photo.rgb, edit, size)
+            when, from_file = _captured_at(photo, path)
+            output = _write(
+                out_dir,
+                taken,
+                photo_filename(patient, title, when),
+                encode_jpeg(image, photo.metadata),
             )
-        )
+            frames.append((when, image))
+            notes = [m for m in (edit.align.message, MTIME_WARNING if from_file else None) if m]
+            outcomes.append(
+                PhotoOutcome(
+                    path,
+                    edit.align.status,
+                    output,
+                    edit.align.confidence,
+                    edit.align.model,
+                    " ".join(notes) or None,
+                )
+            )
 
     # Mixing EXIF times that carry an offset with naive file times must not break sorting;
     # the recorded wall-clock time is what orders a single case.

@@ -6,10 +6,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import structlog
 from PIL import ExifTags, Image
+from structlog.testing import capture_logs
 from typer.testing import CliRunner
 
 from dental_image_organizer.cli import app
+from dental_image_organizer.services.headless import run_procedure
 from support.scenarios import about_center, make_pair
 from support.synthetic import make_scene
 
@@ -189,3 +192,37 @@ def test_unwritable_output_folder_is_an_error_not_a_traceback(
 
     assert result.exit_code == 1
     assert "error:" in result.output
+
+
+@pytest.mark.usefixtures("debug_logging")
+def test_alignment_debug_events_name_the_photo(case_dir: Path, tmp_path: Path) -> None:
+    # capture_logs() swaps the processor chain, so contextvars are merged explicitly here.
+    with capture_logs(processors=[structlog.contextvars.merge_contextvars]) as logs:
+        run_procedure(
+            case_dir / "reference.jpg",
+            [case_dir / "IMG_0001.jpg"],
+            tmp_path / "out",
+            patient="A",
+            title="B",
+        )
+
+    events = [entry for entry in logs if entry["event"] == "align"]
+    assert [entry.get("source") for entry in events] == ["IMG_0001.jpg"]
+
+
+@pytest.mark.usefixtures("debug_logging")
+def test_unreadable_photo_log_omits_the_patient_folder(case_dir: Path, tmp_path: Path) -> None:
+    # A directory with a photo's name makes read_bytes() raise an OSError on every OS.
+    unreadable = tmp_path / "Alex Wang" / "IMG_0009.jpg"
+    unreadable.mkdir(parents=True)
+
+    with capture_logs() as logs:
+        report = run_procedure(
+            case_dir / "reference.jpg", [unreadable], tmp_path / "out", patient="A", title="B"
+        )
+
+    assert [photo.status for photo in report.photos] == ["failed"]
+    events = [entry for entry in logs if entry["event"] == "photo_unreadable"]
+    assert len(events) == 1
+    assert events[0]["source"] == "IMG_0009.jpg"
+    assert "Alex Wang" not in str(events[0]["error"])

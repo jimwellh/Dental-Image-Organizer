@@ -1,8 +1,5 @@
-from collections.abc import Iterator
-
 import numpy as np
 import pytest
-import structlog
 from structlog.testing import capture_logs
 
 from dental_image_organizer.core import transform as tf
@@ -11,7 +8,6 @@ from dental_image_organizer.core.align import (
     homography_gate_failures,
     prepare_reference,
 )
-from dental_image_organizer.log import configure_logging
 from support.scenarios import REFERENCE_BOX, about_center, corner_error, make_pair
 from support.synthetic import make_scene, tilt_homography
 
@@ -96,16 +92,6 @@ def test_gate_accepts_mild_perspective_with_clear_gain() -> None:
     h[2, 1] = 2e-5
 
     assert homography_gate_failures(h, s, FRAME, homography_cc=0.99, similarity_cc=0.95) == []
-
-
-@pytest.fixture
-def debug_logging() -> Iterator[None]:
-    # Another test may have left a WARNING-level filter in the global config, which would
-    # drop debug events before any processor (including the capture) sees them.
-    saved = structlog.get_config()
-    configure_logging("DEBUG")
-    yield
-    structlog.configure(**saved)
 
 
 @pytest.mark.usefixtures("debug_logging")

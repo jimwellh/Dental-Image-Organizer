@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from structlog.testing import capture_logs
 
 from dental_image_organizer.core import transform as tf
 from dental_image_organizer.core.align import align_to_reference, prepare_reference
@@ -94,3 +95,17 @@ def test_tight_crop_uses_second_pass_and_reports_detail_ratio() -> None:
     )
     assert corner_error(pair, got) < 0.01
     assert result.detail_ratio == pytest.approx(1.25, rel=0.05)
+
+
+@pytest.mark.usefixtures("debug_logging")
+def test_implausible_rotation_falls_back_and_logs_the_rejected_metrics(scene: np.ndarray) -> None:
+    pair = make_pair(scene, about_center(W, H, 1.0, 60.0))
+
+    with capture_logs() as logs:
+        result = align_to_reference(pair.photo, prepare_reference(pair.reference))
+
+    assert result.estimated is False
+    events = [entry for entry in logs if entry["event"] == "align_rejected"]
+    assert len(events) == 1
+    # The logged angle belongs to the photo -> reference map, the inverse of the applied rotation.
+    assert events[0]["angle"] == pytest.approx(-60.0, abs=1.0)
