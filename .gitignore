@@ -32,6 +32,9 @@ doc/Project Requirements Document/
 # Real, de-identified photos for local algorithm tuning only.
 local_fixtures/
 
+# Third-party app research notes stay local and are never published.
+doc/research/
+
 # Model weights are distributed via GitHub Releases, not git.
 *.onnx
 

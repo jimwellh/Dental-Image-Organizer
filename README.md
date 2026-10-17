@@ -60,7 +60,6 @@ the launcher costs nothing.
 
 - [Product requirements](doc/requirements.md)
 - [Technical design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md)
-- [Reference app analysis](doc/research/2026-10-16-photo-smile-tw-analysis.md)
 
 ## Tech stack
 
