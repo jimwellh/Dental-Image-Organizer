@@ -176,3 +176,16 @@ def test_empty_patient_name_is_rejected_before_writing(case_dir: Path, tmp_path:
 
     assert result.exit_code == 1
     assert not (tmp_path / "out").exists()
+
+
+def test_unwritable_output_folder_is_an_error_not_a_traceback(
+    case_dir: Path, tmp_path: Path
+) -> None:
+    # A regular file where the parent folder should be makes mkdir fail on every OS.
+    blocker = tmp_path / "file.txt"
+    blocker.write_bytes(b"not a folder")
+
+    result = _invoke(case_dir, blocker / "out")
+
+    assert result.exit_code == 1
+    assert "error:" in result.output

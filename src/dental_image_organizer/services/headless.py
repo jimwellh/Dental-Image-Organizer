@@ -11,7 +11,13 @@ from typing import Literal
 import structlog
 
 from dental_image_organizer.core.align import prepare_reference
-from dental_image_organizer.core.imageio import DecodedImage, RGBImage, decode, encode_jpeg
+from dental_image_organizer.core.imageio import (
+    MAX_JPEG_DIMENSION,
+    DecodedImage,
+    RGBImage,
+    decode,
+    encode_jpeg,
+)
 from dental_image_organizer.core.layout import render_sequence
 from dental_image_organizer.core.naming import (
     photo_filename,
@@ -91,8 +97,13 @@ def run_procedure(
         except UnsupportedFormatError as exc:
             outcomes.append(PhotoOutcome(path, "skipped", message=str(exc), skip_reason=exc.reason))
             continue
-        except (CorruptImageError, OSError) as exc:
+        except CorruptImageError as exc:
             log.error("photo_unreadable", source=path.name, error=str(exc))
+            outcomes.append(PhotoOutcome(path, "failed", message=str(exc)))
+            continue
+        except OSError as exc:
+            # str(exc) embeds the full path, and folders are often named after patients.
+            log.error("photo_unreadable", source=path.name, error=exc.strerror)
             outcomes.append(PhotoOutcome(path, "failed", message=str(exc)))
             continue
         edit = compute_edit(photo.rgb, prepared)
@@ -121,7 +132,7 @@ def run_procedure(
         out_dir,
         taken,
         sequence_filename(patient, title, today or date.today()),
-        encode_jpeg(render_sequence([image for _, image in frames])),
+        encode_jpeg(render_sequence([image for _, image in frames], max_width=MAX_JPEG_DIMENSION)),
     )
     return ProcedureReport(reference_output, outcomes, sequence_output)
 

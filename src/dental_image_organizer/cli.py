@@ -77,7 +77,7 @@ def process(
         report = run_procedure(
             reference, photos, out, patient=patient, title=title, output_scale=output_scale
         )
-    except DioError as exc:
+    except (DioError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     _print_report(report)

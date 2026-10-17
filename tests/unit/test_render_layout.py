@@ -80,6 +80,14 @@ def test_sequence_scales_taller_images_down_to_the_shortest() -> None:
     assert strip.shape == (100, 300, 3)
 
 
+def test_sequence_shrinks_to_fit_a_maximum_width() -> None:
+    frames = [np.zeros((100, 150, 3), np.uint8)] * 3
+
+    strip = render_sequence(frames, gap_px=4, max_width=200)
+
+    assert strip.shape == (42, 197, 3)
+
+
 def test_empty_sequence_is_rejected() -> None:
     with pytest.raises(ValueError):
         render_sequence([])

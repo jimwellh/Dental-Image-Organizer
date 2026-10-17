@@ -23,6 +23,9 @@ log = structlog.get_logger(__name__)
 pi_heif.register_heif_opener()
 
 MAX_PIXELS = 200_000_000
+# libjpeg cannot encode an image with a side longer than this; Pillow then fails with
+# "broken data stream", so callers that build wide canvases must stay within it.
+MAX_JPEG_DIMENSION = 65500
 # Pillow raises DecompressionBombError above twice this value, so its guard matches ours.
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS // 2
 

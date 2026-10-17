@@ -237,6 +237,15 @@ def test_encode_can_keep_gps() -> None:
     assert out.getexif().get_ifd(ExifTags.IFD.GPSInfo)[ExifTags.GPS.GPSLatitudeRef] == "N"
 
 
+def test_encoder_limit_constant_matches_libjpeg() -> None:
+    longest = np.zeros((1, imageio.MAX_JPEG_DIMENSION, 3), np.uint8)
+    too_long = np.zeros((1, imageio.MAX_JPEG_DIMENSION + 1, 3), np.uint8)
+
+    assert imageio.encode_jpeg(longest)
+    with pytest.raises(OSError):
+        imageio.encode_jpeg(too_long)
+
+
 def test_resize_long_edge_downscales_and_reports_scale() -> None:
     rgb = np.zeros((1000, 3000, 3), np.uint8)
 
