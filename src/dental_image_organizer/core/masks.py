@@ -38,7 +38,8 @@ def gingiva_mask(rgb: RGBImage, teeth: BoolMask | None = None) -> BoolMask:
     raw = (lab[..., 1] > GINGIVA_MIN_A) & (lab[..., 0] > GINGIVA_MIN_L)
     if teeth is None:
         teeth = tooth_mask(rgb)
-    return _clean(raw & ~teeth)
+    # Closing can fill gaps narrower than the kernel, so exclude the teeth again afterwards.
+    return _clean(raw & ~teeth) & ~teeth
 
 
 def _clean(mask: BoolMask) -> BoolMask:
