@@ -1,7 +1,7 @@
 # Dental-Image-Organizer — Technical Design Spec
 
 - **Date:** 2026-10-16
-- **Status:** Approved design; awaiting written-spec review
+- **Status:** Approved; written spec reviewed 2026-10-16
 - **Inputs:**
   - [Product requirements](../../requirements.md)
   - [Reference app analysis](../../research/2026-10-16-photo-smile-tw-analysis.md)
@@ -291,6 +291,9 @@ by future adapters (OpenClaw, Telegram, CLI).
 - `dio serve`:
   - Binds **`127.0.0.1` only**.
   - Uses port 8765 by default. If the port is busy, it scans 8765–8775.
+  - It first tries the port recorded in `instance.json` by the previous run. The origin then stays
+    the same across restarts (in-app update, §7.3; relaunch from the Dock), so an open page that
+    polls `/api/health` reconnects to the restarted server.
   - Opens the default browser.
 - **Single instance.**
   - A `filelock` in the app data directory guards the library.
@@ -410,7 +413,9 @@ sessions. The goal is a transform that maps the new photo into the reference fra
 8. **Sanity limits.** The similarity must satisfy these limits; otherwise it is rejected and
    handled as in the `c < 0.35` case. The homography is additionally bounded by the corner gate in
    step 6.
-   - scale ∈ [0.2, 5.0] relative to the working copy;
+   - scale ∈ [0.2, 5.0], measured from the full photo's working copy to the reference's working
+     copy after composing the tight-crop second pass (step 4); a reference covering less than
+     about 20% of the photo's width is therefore flagged rather than force-fitted;
    - rotation ∈ [−45°, 45°].
 
 The resulting transform is stored as a 3 × 3 matrix in **normalized coordinates** (§4.8), so it
@@ -554,9 +559,15 @@ same original-minus-mirror feature (research doc); this is an independent re-imp
    - Defaults start from Settings (§11, question 2) and are then **learned**. Every confirmed
      composite, whether an export or a teaching set (§3.5), records each slot's final flip in
      `classifier/flips.json`.
-   - Once a slot has at least 3 confirmations, its default becomes the value used in the
-     majority of its last 5.
+   - Once a slot has at least 3 confirmations, its default becomes the most frequent value among
+     its last (up to) 5 confirmations. On a tie, the current default is kept.
    - Settings shows the learned defaults. The user can pin a slot's flip to stop learning.
+   - **Storage and precedence.**
+     - Starting values and pins live in `settings.json` (`flip_start`, `flip_pins`) and change
+       through `PUT /api/settings`.
+     - Confirmation history and learned values live in `classifier/flips.json`.
+     - The effective default of a slot is its pin if set, otherwise its learned value (≥ 3
+       confirmations), otherwise its starting value.
    - The flip is learned per slot rather than predicted per photo. A mirrored right-side view
      looks like a direct left-side view, so appearance alone cannot tell a mirror shot from the
      opposite side. Per-slot learning follows the dentist's habits instead.
@@ -689,7 +700,7 @@ by Time Machine.
 
 | Directory | Contents |
 |---|---|
-| config | `settings.json` (including `uv_path` and `dio_path` for in-app updates) |
+| config | `settings.json` (including `uv_path` and `dio_path` for in-app updates, and `flip_start` / `flip_pins`, §4.7.2) |
 | data | `classifier/` (`samples.npz`, `model.json`, `flips.json`), `instance.lock`, `instance.json` (port, pid) |
 | cache | render cache (LRU-capped), model file, export zips, teaching sessions, update script |
 | log | `dio.log` |
@@ -721,7 +732,7 @@ by Time Machine.
       "edit": {
         "transform": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         "model": "similarity",
-        "output_size": [2400, 1600],
+        "output_size": [4032, 3024],
         "detail_ratio": 1.0,
         "color": {"method": "identity", "params": {}},
         "source": "auto",
@@ -995,6 +1006,12 @@ curl -LsSf https://raw.githubusercontent.com/jimwellh/Dental-Image-Organizer/mai
      under Rosetta reports `x86_64` on Apple Silicon.
    - If `sysctl -n sysctl.proc_translated` is `1` (running under Rosetta), the script re-executes
      itself with `arch -arm64`, so that `uv` provisions an arm64 Python.
+     - When run from a file, it re-executes that file: `exec arch -arm64 /bin/sh "$0" "$@"`.
+     - When piped (`curl … | sh`), there is no file to re-run, because `sh` reads the script from
+       stdin. The script then re-fetches itself from its pinned URL:
+       `exec arch -arm64 /bin/sh -c "$(curl -LsSf "$INSTALL_URL")"`.
+     - Environment overrides such as `DIO_WHEEL` are preserved, because `exec` keeps the
+       environment.
 2. If `uv` is missing, installs it with the official installer (`https://astral.sh/uv/install.sh`),
    and discloses this in its output.
 3. Runs `uv tool install --python 3.12 dental-image-organizer`, or `--upgrade` if it is already
@@ -1104,7 +1121,8 @@ binary patient data is needed.
   - **left/right separation:** synthetic pairs that differ only by mirroring land in the same
     group but on opposite sides;
   - **flip learning:** a slot's default changes only after 3 confirmations and follows the
-    majority of the last 5; a pinned slot never changes.
+    most frequent value of the last 5; a tie keeps the current default; a pinned slot never
+    changes.
 - **Naming.** NFC/NFD equivalence (`王小明` as NFD → NFC), sanitization, truncation by bytes,
   collision suffixes, and timezone handling.
 - **Storage.** Atomic write (simulated crash leaves the old file intact), schema validation,
