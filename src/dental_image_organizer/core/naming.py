@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable
 from datetime import date, datetime
 
@@ -38,6 +39,14 @@ def sequence_filename(patient: str, title: str, generated_on: date) -> str:
 
 def composite_filename(patient: str, tag: str, captured_on: date) -> str:
     return _join(patient, tag, f"_Composite_{captured_on:%Y%m%d}.jpg")
+
+
+def composite_capture_date(dates: Iterable[date]) -> date:
+    """Most frequent capture date; the earliest wins a tie so the name is deterministic."""
+    counts = Counter(dates)
+    if not counts:
+        raise ValueError("A composite needs at least one capture date.")
+    return min(counts, key=lambda d: (-counts[d], d))
 
 
 def patient_export_zip_name(patient: str, generated_on: date) -> str:
