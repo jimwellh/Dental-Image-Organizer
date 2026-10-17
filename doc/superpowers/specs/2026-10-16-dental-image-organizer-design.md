@@ -2,9 +2,7 @@
 
 - **Date:** 2026-10-16
 - **Status:** Approved; written spec reviewed 2026-10-16
-- **Inputs:**
-  - [Product requirements](../../requirements.md)
-  - [Reference app analysis](../../research/2026-10-16-photo-smile-tw-analysis.md)
+- **Inputs:** [Product requirements](../../requirements.md)
 
 ## 1. Summary
 
@@ -464,8 +462,7 @@ After alignment, pixel correspondences exist:
 - Model: DINOv2 ViT-S/14, exported by us to ONNX with `scripts/export_dinov2_onnx.py` (pooling
   in-graph) and dynamically quantized to int8 (≈ 25 MB; Apache-2.0).
   - No third-party model files are used. The reference app's model and classifier heads carry no
-    license, so only its publicly observed ideas are re-implemented
-    ([research](../../research/2026-10-16-photo-smile-tw-analysis.md)).
+    license, so only its publicly observed ideas are re-implemented.
 - Preprocessing:
   1. Rotate portrait images to landscape.
   2. Resize to 336 × 224, which gives a 24 × 16 patch grid.
@@ -935,7 +932,6 @@ Dental-Image-Organizer/
 ├── uv.lock
 ├── doc/
 │   ├── requirements.md          # English requirements (original Chinese HTML is not published)
-│   ├── research/                # reference-app analysis
 │   └── superpowers/
 │       ├── specs/               # design specs (this file)
 │       └── plans/               # implementation plans
