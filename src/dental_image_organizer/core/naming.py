@@ -41,8 +41,12 @@ def composite_filename(patient: str, tag: str, captured_on: date) -> str:
 
 
 def patient_export_zip_name(patient: str, generated_on: date) -> str:
-    name = f"{sanitize_component(patient)}_Export_{generated_on:%Y%m%d}.zip"
-    return _trim_to_bytes(name)
+    # The suffix is fixed by spec §4.9 and identifies the archive, so only the patient shrinks.
+    suffix = f"_Export_{generated_on:%Y%m%d}.zip"
+    p = sanitize_component(patient)
+    while len(f"{p}{suffix}".encode()) > MAX_FILENAME_BYTES and len(p) > 1:
+        p = p[:-1].rstrip() or p[:1]
+    return f"{p}{suffix}"
 
 
 def unique_name(name: str, taken: Iterable[str]) -> str:
@@ -77,14 +81,6 @@ def _join(patient: str, label: str, suffix: str) -> str:
 
 def _size(patient: str, label: str, suffix: str) -> int:
     return len(f"{patient}_{label}{suffix}".encode())
-
-
-def _trim_to_bytes(name: str) -> str:
-    stem, _, ext = name.rpartition(".")
-    while len(name.encode()) > MAX_FILENAME_BYTES and len(stem) > 1:
-        stem = stem[:-1]
-        name = f"{stem}.{ext}"
-    return name
 
 
 def _key(name: str) -> str:

@@ -38,6 +38,14 @@ def test_patient_export_zip_name() -> None:
     )
 
 
+def test_long_multibyte_patient_zip_name_keeps_the_export_suffix() -> None:
+    name = naming.patient_export_zip_name("王" * 80, date(2026, 10, 16))
+
+    assert len(name.encode()) <= naming.MAX_FILENAME_BYTES
+    assert name.endswith("_Export_20261016.zip")
+    assert name.startswith("王")
+
+
 def test_capture_time_uses_the_recorded_wall_clock_not_the_machine_timezone() -> None:
     taipei = timezone(timedelta(hours=8))
 
