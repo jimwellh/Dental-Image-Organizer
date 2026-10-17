@@ -221,10 +221,23 @@ def homography_gate_failures(
     shift = np.linalg.norm(tf.map_points(similarity, photo_corners) - corners, axis=1)
     if np.max(shift) > HOMOGRAPHY_MAX_CORNER_SHIFT * w:
         failures.append("corner_shift")
-    if np.any(denominators <= 0) or not cv2.isContourConvex(
-        photo_corners.astype(np.float32).reshape(-1, 1, 2)
-    ):
+    # A non-positive w' means that frame point is mapped from behind the camera.
+    behind_camera = bool(np.any(denominators <= 0))
+    convex = not behind_camera and bool(
+        cv2.isContourConvex(photo_corners.astype(np.float32).reshape(-1, 1, 2))
+    )
+    if not convex:
         failures.append("not_convex")
+    log.debug(
+        "homography_gates",
+        homography_cc=round(homography_cc, 4),
+        similarity_cc=round(similarity_cc, 4),
+        ecc_gain=round(homography_cc - similarity_cc, 4),
+        max_corner_shift=round(float(np.max(shift)) / w, 4),
+        behind_camera=behind_camera,
+        convex=convex,
+        failed=failures,
+    )
     return failures
 
 
