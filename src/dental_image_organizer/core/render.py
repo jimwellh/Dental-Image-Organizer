@@ -26,6 +26,7 @@ def render(
     *,
     curves: LabCurves | None = None,
     interpolation: int = cv2.INTER_LANCZOS4,
+    border_mode: int = cv2.BORDER_CONSTANT,
 ) -> RGBImage:
     """Warp `image` (any resolution) with the normalized `transform`, then apply colors."""
     out_w, out_h = output_size
@@ -42,7 +43,7 @@ def render(
             h_px,
             (out_w, out_h),
             flags=interpolation,
-            borderMode=cv2.BORDER_CONSTANT,
+            borderMode=border_mode,
             borderValue=(0, 0, 0),
         ),
     )

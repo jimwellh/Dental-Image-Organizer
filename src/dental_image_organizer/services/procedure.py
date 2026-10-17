@@ -55,4 +55,6 @@ def render_edit(photo_rgb: RGBImage, edit: ProcedureEdit, size: tuple[int, int])
 def render_reference(reference_rgb: RGBImage, size: tuple[int, int]) -> RGBImage:
     if (reference_rgb.shape[1], reference_rgb.shape[0]) == size:
         return reference_rgb
-    return render(reference_rgb, tf.identity(), size)
+    # The identity upscale samples just past the last source pixel; replicating the edge keeps
+    # black from bleeding into the last row and column.
+    return render(reference_rgb, tf.identity(), size, border_mode=cv2.BORDER_REPLICATE)

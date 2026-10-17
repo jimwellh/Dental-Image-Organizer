@@ -7,12 +7,19 @@ Each run writes local_fixtures/reports/procedure_<case>.csv for threshold tuning
 import csv
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from dental_image_organizer.core.align import prepare_reference
-from dental_image_organizer.core.imageio import decode
+from dental_image_organizer.core.align import (
+    WORKING_LONG_EDGE,
+    PreparedReference,
+    prepare_reference,
+)
+from dental_image_organizer.core.color import to_lab
+from dental_image_organizer.core.imageio import decode, resize_long_edge
+from dental_image_organizer.core.render import coverage_mask, render
 from dental_image_organizer.errors import UnsupportedFormatError
-from dental_image_organizer.services.procedure import compute_edit
+from dental_image_organizer.services.procedure import ProcedureEdit, compute_edit, render_edit
 
 ROOT = Path(__file__).resolve().parents[2] / "local_fixtures"
 CASES = ROOT / "procedure"
@@ -37,7 +44,9 @@ def test_procedure_case_metrics(case: Path) -> None:
             photo = decode(path.read_bytes())
         except UnsupportedFormatError:
             continue
-        result = compute_edit(photo.rgb, reference).align
+        edit = compute_edit(photo.rgb, reference)
+        result = edit.align
+        before, after = _color_error(photo.rgb, edit, reference)
         rows.append(
             {
                 "photo": path.name,
@@ -50,6 +59,9 @@ def test_procedure_case_metrics(case: Path) -> None:
                 "tight_crop": result.tight_crop,
                 "mirrored": result.mirrored,
                 "detail_ratio": round(result.detail_ratio, 3),
+                "curves_fitted": edit.curves is not None,
+                "delta_e_before": round(before, 2),
+                "delta_e_after": round(after, 2),
             }
         )
     report = ROOT / "reports" / f"procedure_{case.name}.csv"
@@ -59,3 +71,21 @@ def test_procedure_case_metrics(case: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     assert rows, f"no photos found in {case}"
+
+
+def _color_error(
+    photo_rgb: np.ndarray, edit: ProcedureEdit, reference: PreparedReference
+) -> tuple[float, float]:
+    """Mean Delta E76 to the reference working copy over the covered overlap, before and after
+    color matching."""
+    working, _ = resize_long_edge(photo_rgb, WORKING_LONG_EDGE)
+    size = (reference.working.shape[1], reference.working.shape[0])
+    valid = coverage_mask((working.shape[1], working.shape[0]), edit.transform, size)
+    if not valid.any():
+        return float("nan"), float("nan")
+    target = to_lab(reference.working)
+
+    def error(image: np.ndarray) -> float:
+        return float(np.linalg.norm(to_lab(image) - target, axis=-1)[valid].mean())
+
+    return error(render(working, edit.transform, size)), error(render_edit(working, edit, size))

@@ -87,3 +87,12 @@ def test_render_reference_upscales_the_reference() -> None:
 
     assert render_reference(reference, (900, 600)).shape == (600, 900, 3)
     assert render_reference(reference, (600, 400)) is reference
+
+
+@pytest.mark.parametrize("scale", [1.5, 2.0])
+def test_upscaled_reference_has_no_dark_edge(scale: float) -> None:
+    reference = np.full((400, 600, 3), 200, np.uint8)
+
+    out = render_reference(reference, output_size((600, 400), scale))
+
+    assert np.abs(out.astype(int) - 200).max() <= 2
