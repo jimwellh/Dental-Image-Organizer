@@ -1,10 +1,12 @@
 import hashlib
 import io
+import re
 import shutil
 import unicodedata
 from pathlib import Path
 from typing import Any
 
+import click
 import numpy as np
 import pytest
 import structlog
@@ -176,8 +178,10 @@ def test_a_file_name_shared_by_two_photos_asks_for_the_path(set_dir: Path, tmp_p
     result = _invoke_photos(photos, tmp_path / "out", "--assign", "IMG_0001.jpg=upper_left")
 
     assert result.exit_code == 2, result.output
-    # The usage error is boxed and wrapped; compare its words.
-    words = " ".join(result.output.replace("│", " ").split())
+    # The usage error is boxed and wrapped, and colored where Typer forces a terminal (it does
+    # under GITHUB_ACTIONS); compare its words without styles or box-drawing characters.
+    plain = re.sub("[─-╿]", " ", click.unstyle(result.output))
+    words = " ".join(plain.split())
     assert "'IMG_0001.jpg' is the name of 2 photos; pass its path instead" in words
     assert not (tmp_path / "out").exists()
 
