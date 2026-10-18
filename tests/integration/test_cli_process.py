@@ -13,7 +13,7 @@ from structlog.testing import capture_logs
 from typer.testing import CliRunner
 
 from dental_image_organizer.cli import app
-from dental_image_organizer.services import headless
+from dental_image_organizer.services import batch_io, headless
 from dental_image_organizer.services.headless import run_procedure
 from support.scenarios import about_center, make_pair
 from support.synthetic import make_scene
@@ -260,7 +260,7 @@ def test_unexpected_error_in_one_photo_fails_only_that_photo(
 def test_unexpected_decode_error_fails_only_that_photo(
     case_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    real_decode = headless.decode
+    real_decode = batch_io.decode
     bad = (case_dir / "IMG_0001.jpg").read_bytes()
 
     def decode_failing_on_one_photo(data: bytes) -> Any:
@@ -268,7 +268,7 @@ def test_unexpected_decode_error_fails_only_that_photo(
             raise MemoryError  # decoding a 48 MP HEIC holds several full-size copies
         return real_decode(data)
 
-    monkeypatch.setattr(headless, "decode", decode_failing_on_one_photo)
+    monkeypatch.setattr(batch_io, "decode", decode_failing_on_one_photo)
 
     report = run_procedure(
         case_dir / "reference.jpg",
