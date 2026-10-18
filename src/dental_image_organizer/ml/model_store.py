@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 from collections.abc import Callable
@@ -64,13 +65,13 @@ def download_model(
     progress: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Download into ``cache_dir`` and publish atomically only after hash and size verify."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
     final = cache_dir / spec.filename
     partial = cache_dir / f"{spec.filename}.part"
     # GitHub redirects release assets to its CDN, so redirects must be followed.
     http = client or httpx.Client(follow_redirects=True, timeout=TIMEOUT_SECONDS)
     _log.info("model_download_started")
     try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256()
         done = 0
         with http.stream("GET", spec.url) as response:
@@ -93,8 +94,16 @@ def download_model(
     except httpx.HTTPError as exc:
         _log.error("model_download_failed", error=type(exc).__name__)
         raise ModelUnavailableError("The model could not be downloaded") from exc
+    except OSError as exc:
+        # A full disk or an unwritable cache must fall back like being offline (spec §4.6).
+        # strerror leaves out the path, which sits in the user's home folder.
+        _log.error("model_download_failed", error=type(exc).__name__)
+        reason = exc.strerror or type(exc).__name__
+        raise ModelUnavailableError(f"Saving the AI model failed: {reason}") from exc
     finally:
-        partial.unlink(missing_ok=True)
+        # The cache folder may be missing or blocked here; a stale .part is rewritten next time.
+        with contextlib.suppress(OSError):
+            partial.unlink(missing_ok=True)
         if client is None:
             http.close()
     _log.info("model_download_finished")

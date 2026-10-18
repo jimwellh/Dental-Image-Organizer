@@ -4,6 +4,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 
 from dental_image_organizer.errors import ModelIntegrityError, ModelUnavailableError
 from dental_image_organizer.ml.model_store import (
@@ -71,6 +72,21 @@ def test_http_error_is_unavailable_and_leaves_nothing(tmp_path: Path) -> None:
         download_model(_spec(b"good"), tmp_path, client=_client(lambda r: httpx.Response(404)))
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_local_write_error_is_unavailable_and_names_no_path(tmp_path: Path) -> None:
+    # A file where the cache folder belongs makes mkdir fail, as a read-only home would.
+    blocked = tmp_path / "Alex Wang"
+    blocked.write_bytes(b"")
+
+    with capture_logs() as logs, pytest.raises(ModelUnavailableError) as info:
+        download_model(
+            _spec(b"x"), blocked, client=_client(lambda r: httpx.Response(200, content=b"x"))
+        )
+
+    assert str(info.value).startswith("Saving the AI model failed: ")
+    assert "Alex Wang" not in str(info.value)
+    assert [e["event"] for e in logs if e["log_level"] == "error"] == ["model_download_failed"]
 
 
 def test_cached_file_with_a_wrong_hash_is_deleted(tmp_path: Path) -> None:
