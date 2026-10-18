@@ -90,8 +90,10 @@ def test_flip_matrix_matches_flip_pixels(flip: Flip) -> None:
 
 
 @pytest.mark.parametrize("slot", SLOTS)
-def test_cell_is_level_cropped_and_free_of_black_corners(slot: Slot) -> None:
-    photo = make_view(slot, 5, angle=9.0)
+# 4:3 is the iPhone default; 3:2 matches the cell, so only 4:3 crops away height.
+@pytest.mark.parametrize("size", [VIEW_SIZE, (1600, 1200)], ids=["3x2", "4x3"])
+def test_cell_is_level_cropped_and_free_of_black_corners(slot: Slot, size: tuple[int, int]) -> None:
+    photo = make_view(slot, 5, angle=9.0, size=size)
 
     geometry = normalize_view(photo, slot, "none", CELL)
     cell = render(photo, geometry.transform, CELL)
@@ -99,6 +101,16 @@ def test_cell_is_level_cropped_and_free_of_black_corners(slot: Slot) -> None:
     assert coverage_mask((photo.shape[1], photo.shape[0]), geometry.transform, CELL).all()
     assert abs(estimate_level(cell, slot).angle_deg) <= 0.5
     assert tooth_mask(cell).mean() > 0.1
+
+
+@pytest.mark.parametrize("size", [(240, 160), (160, 120)])
+def test_small_photo_leaves_no_cell_pixel_uncovered(size: tuple[int, int]) -> None:
+    # Cell pixels sample photo pixel centers, so the crop must stay within [0, w - 1].
+    photo = make_view("upper_right", 5, angle=9.0, size=size)
+
+    geometry = normalize_view(photo, "upper_right", "none", CELL)
+
+    assert coverage_mask(size, geometry.transform, CELL).all()
 
 
 @pytest.mark.parametrize("slot", SLOTS)

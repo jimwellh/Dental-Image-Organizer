@@ -23,14 +23,13 @@ from dental_image_organizer.ml.embedder import Embedder, EmbeddingPair
 from dental_image_organizer.ml.model_store import DEFAULT_MODEL, cached_model
 from dental_image_organizer.services.batch_io import capture_time
 from dental_image_organizer.services.composite import plan_composite
+from dental_image_organizer.services.headless_composite import WORKING_LONG_EDGE
 
 ROOT = Path(__file__).resolve().parents[2] / "local_fixtures"
 SETS = ROOT / "composite"
 REPORTS = ROOT / "reports"
 REGULARIZATIONS = (1.0, 10.0, 100.0)
 MIN_SETS = 4
-# Same working size as the headless batch, so the metrics match what `dio composite` computes.
-WORKING_LONG_EDGE = 1600
 
 pytestmark = [
     pytest.mark.golden,
@@ -61,6 +60,7 @@ def _load(folder: Path) -> tuple[list[str], list[RGBImage], Assignment]:
         except UnsupportedFormatError:
             continue
         names.append(path.name)
+        # The batch's working size, so the metrics match what `dio composite` computes.
         images.append(resize_long_edge(photo.rgb, WORKING_LONG_EDGE)[0])
         times.append(capture_time(photo, path)[0])
     return names, images, assign_by_order(times, _order(folder))

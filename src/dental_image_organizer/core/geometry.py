@@ -275,7 +275,9 @@ def _valid_rect(angle_deg: float, w: int, h: int, aspect: float) -> Rect:
     for _ in range(_BISECTION_STEPS):
         mid = (lo + hi) / 2
         photo = tf.map_points(to_photo, corners(mid))
-        if np.all(photo >= 0) and np.all(photo <= (w, h)):
+        # Cell pixels sample photo pixel centers, which end at w - 1 and h - 1; on a small
+        # photo the last half pixel would otherwise show as an uncovered black edge.
+        if np.all(photo >= 0) and np.all(photo <= (w - 1, h - 1)):
             lo = mid
         else:
             hi = mid

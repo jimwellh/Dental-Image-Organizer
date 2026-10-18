@@ -1,4 +1,9 @@
-"""Color matching to the reference (spec §4.5.2): monotone per-channel curves in CIE Lab."""
+"""Color matching in CIE Lab.
+
+Two methods share the Lab conversions: monotone per-channel curves that match a procedure photo
+to its reference (spec §4.5.2), and an affine Reinhard mean/spread transfer that unifies the
+cells of a composite (spec §4.7.3).
+"""
 
 from __future__ import annotations
 
