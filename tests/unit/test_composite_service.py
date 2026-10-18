@@ -53,6 +53,13 @@ def test_missing_baseline_falls_back_to_the_first_filled_slot(raw_set: list[np.n
     assert plan.baseline == "upper_right" and "occlusion_front" not in plan.cells
 
 
+def test_positions_must_label_every_image(raw_set: list[np.ndarray]) -> None:
+    with pytest.raises(ValueError, match="1 positions for 9 images"):
+        plan_composite(
+            raw_set, assign_by_order(TIMES[:9], SLOTS), flips=DEFAULT_FLIPS, positions=[1]
+        )
+
+
 def test_a_tenth_photo_goes_to_the_tray(raw_set: list[np.ndarray]) -> None:
     plan = plan_composite(raw_set + raw_set[:1], assign_by_order(TIMES, SLOTS), flips=DEFAULT_FLIPS)
 

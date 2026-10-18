@@ -322,17 +322,37 @@ def test_failed_download_falls_back_to_shooting_order(
     assert (tmp_path / "out" / OUTPUT).exists()
 
 
-def test_corrupt_photo_leaves_its_slot_empty(set_dir: Path, tmp_path: Path) -> None:
+# IMG_0001 has no decoded photo before it, so its rank comes from the one after it.
+@pytest.mark.parametrize("broken", [5, 1])
+def test_corrupt_photo_leaves_its_slot_empty(set_dir: Path, tmp_path: Path, broken: int) -> None:
     copy = tmp_path / "set"
     shutil.copytree(set_dir, copy)
-    broken = copy / "IMG_0005.jpg"
-    broken.write_bytes(broken.read_bytes()[:300])
+    damaged = copy / f"IMG_{broken:04d}.jpg"
+    damaged.write_bytes(damaged.read_bytes()[:300])
 
     result = _invoke(copy, tmp_path / "out")
 
     assert result.exit_code == 1, result.output
-    assert "IMG_0005.jpg: " in result.output
+    lines = _lines(result)
+    assert f"IMG_{broken:04d}.jpg: " in lines["failed"]
     assert (tmp_path / "out" / OUTPUT).exists()
+    # The unreadable photo keeps its rank in the shooting order, so no later photo moves up.
+    for number, slot in enumerate(SLOTS, start=1):
+        expected = "(empty)" if number == broken else f"IMG_{number:04d}.jpg"
+        assert expected in lines[slot], lines[slot]
+
+
+@pytest.mark.usefixtures("debug_logging")
+def test_planning_events_carry_input_positions(set_dir: Path, tmp_path: Path) -> None:
+    jpegs = sorted(set_dir.glob("*.jpg"))
+    # The skipped video makes every later photo's input position one more than its index.
+    photos = [*jpegs[:4], set_dir / "IMG_0099.MOV", *jpegs[4:]]
+
+    with capture_logs(processors=[structlog.contextvars.merge_contextvars]) as logs:
+        run_composite(photos, tmp_path / "out", patient="A", tag="B")
+
+    levels = {entry["slot"]: entry["photo"] for entry in logs if entry["event"] == "level"}
+    assert levels == {slot: i + 1 if i < 4 else i + 2 for i, slot in enumerate(SLOTS)}
 
 
 def test_photo_that_fails_planning_leaves_its_slot_empty(

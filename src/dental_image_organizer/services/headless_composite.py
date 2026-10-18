@@ -29,7 +29,12 @@ from dental_image_organizer.errors import (
     StorageError,
     UnsupportedFormatError,
 )
-from dental_image_organizer.ml.assignment import AssignMethod, with_overrides
+from dental_image_organizer.ml.assignment import (
+    Assignment,
+    AssignMethod,
+    assign_by_order,
+    with_overrides,
+)
 from dental_image_organizer.ml.classifier import SlotClassifier, load_classifier, train_classifier
 from dental_image_organizer.ml.embedder import Embedder, EmbeddingPair
 from dental_image_organizer.ml.model_store import DEFAULT_MODEL, cached_model, download_model
@@ -186,10 +191,18 @@ def run_composite(
 
     images = [w.image for w in workings]
     embeddings = ai.embedder.embed(images) if ai.embedder is not None else None
-    assignment = assign_photos(
-        [w.taken for w in workings], options.order, classifier=ai.classifier, embeddings=embeddings
-    )
-    # A photo that failed to decode is skipped: it is reported already.
+    unreadable = [number for number, p in problems.items() if p.status == "failed"]
+    if ai.classifier is not None and embeddings is not None:
+        # An unreadable photo has no embedding, so the classifier simply never places it.
+        assignment = assign_photos(
+            [w.taken for w in workings],
+            options.order,
+            classifier=ai.classifier,
+            embeddings=embeddings,
+        )
+    else:
+        assignment = _order_keeping_holes(workings, unreadable, options.order)
+    # An --assign entry for a photo that failed to decode is ignored: it is reported already.
     index = {w.number - 1: i for i, w in enumerate(workings)}
     assignment = with_overrides(
         assignment, {index[photo]: slot for photo, slot in assign.items() if photo in index}
@@ -200,7 +213,13 @@ def run_composite(
     if any(w.from_file for w in workings):
         notes.append(MTIME_WARNING)
 
-    plan = plan_composite(images, assignment, flips=options.flips, baseline=options.baseline)
+    plan = plan_composite(
+        images,
+        assignment,
+        flips=options.flips,
+        baseline=options.baseline,
+        positions=[w.number for w in workings],
+    )
     for photo, exc in plan.failed.items():
         working = workings[photo]
         problems[working.number] = PhotoOutcome(
@@ -303,6 +322,29 @@ def _resolve_assign(
     if len(targets) != len(set(targets)):
         raise ValueError("--assign puts two files in the same slot")
     return resolved
+
+
+def _order_keeping_holes(
+    workings: Sequence[_Working], unreadable: Sequence[int], order: Sequence[Slot]
+) -> Assignment:
+    """Shooting order in which each unreadable photo still holds its rank, leaving it empty.
+
+    Without the hole, every later photo would move up one slot. An unreadable photo has no
+    capture time, so it borrows that of the nearest decoded input before it (after it, if none
+    is before); ties keep input order, so it ranks next to the photo it borrowed from.
+    """
+    taken = {w.number: w.taken for w in workings}
+    decoded = sorted(taken)
+
+    def stand_in(number: int) -> datetime:
+        before = [n for n in decoded if n < number]
+        return taken[before[-1] if before else decoded[0]]
+
+    numbers = sorted([*decoded, *unreadable])
+    times = [taken[n] if n in taken else stand_in(n) for n in numbers]
+    by_number = dict(zip(numbers, assign_by_order(times, order).slots, strict=True))
+    slots = tuple(by_number[w.number] for w in workings)
+    return Assignment(slots, (None,) * len(slots), "order")
 
 
 def _resolve_ai(options: CompositeOptions, notify: Callable[[str], None]) -> _AiState:

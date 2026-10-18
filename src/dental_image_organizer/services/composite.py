@@ -78,9 +78,17 @@ def plan_composite(
     flips: Mapping[Slot, Flip],
     baseline: Slot = DEFAULT_BASELINE,
     cell_size: tuple[int, int] = DEFAULT_CELL_SIZE,
+    positions: Sequence[int] | None = None,
 ) -> CompositePlan:
+    """`positions` label each image's log events, 1-based; by default its index + 1.
+
+    A batch passes the input positions, which count skipped and unreadable files too.
+    """
     if len(images) != len(assignment.slots):
         raise ValueError(f"got {len(images)} images for {len(assignment.slots)} assigned photos")
+    labels = list(positions) if positions is not None else list(range(1, len(images) + 1))
+    if len(labels) != len(images):
+        raise ValueError(f"got {len(labels)} positions for {len(images)} images")
     slot_map = assignment.slot_map
     failed: dict[int, Exception] = {}
     geometries: dict[Slot, CellGeometry] = {}
@@ -89,7 +97,7 @@ def plan_composite(
             continue
         photo, flip = slot_map[slot], flips[slot]
         # core/ only sees pixels; binding the position tags its events without file names.
-        with structlog.contextvars.bound_contextvars(photo=photo + 1):
+        with structlog.contextvars.bound_contextvars(photo=labels[photo]):
             try:
                 geometries[slot] = normalize_view(images[photo], slot, flip, cell_size)
             except Exception as exc:
@@ -98,7 +106,9 @@ def plan_composite(
                 log.exception("photo_failed")
                 failed[photo] = exc
 
-    chosen, colors, color_failed = _fit_colors(images, slot_map, geometries, baseline, cell_size)
+    chosen, colors, color_failed = _fit_colors(
+        images, slot_map, geometries, baseline, cell_size, labels
+    )
     failed |= color_failed
     cells = {
         slot: CellPlan(
@@ -131,6 +141,7 @@ def _fit_colors(
     geometries: Mapping[Slot, CellGeometry],
     baseline: Slot,
     cell_size: tuple[int, int],
+    labels: Sequence[int],
 ) -> tuple[Slot | None, dict[Slot, LabAffine], dict[int, Exception]]:
     """Match each cell to the baseline: returns the baseline used, the fits, and the failures."""
     # Small renders keep the fit cheap, and the normalized transforms make them match the
@@ -142,7 +153,7 @@ def _fit_colors(
     regions: dict[Slot, BoolMask] = {}
     for slot, geometry in geometries.items():
         photo = slot_map[slot]
-        with structlog.contextvars.bound_contextvars(photo=photo + 1):
+        with structlog.contextvars.bound_contextvars(photo=labels[photo]):
             try:
                 preview = render(
                     images[photo], geometry.transform, size, interpolation=cv2.INTER_AREA
@@ -164,7 +175,7 @@ def _fit_colors(
         if slot == chosen:
             continue
         photo = slot_map[slot]
-        with structlog.contextvars.bound_contextvars(photo=photo + 1):
+        with structlog.contextvars.bound_contextvars(photo=labels[photo]):
             try:
                 colors[slot] = fit_reinhard(
                     previews[slot], regions[slot], previews[chosen], regions[chosen]
