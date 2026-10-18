@@ -26,6 +26,13 @@ def test_untrained_until_every_slot_has_three_samples() -> None:
     assert train_classifier(pair, slots, "h") is not None
 
 
+def test_embeddings_and_labels_must_match_in_number() -> None:
+    pair, slots = synthetic_pairs(3, 1)
+
+    with pytest.raises(ValueError, match="27 embeddings for 26 labels"):
+        train_classifier(pair, slots[:-1], "h")
+
+
 def test_three_samples_per_slot_classify_new_photos() -> None:
     classifier, _, _ = _trained()
     test, test_slots = synthetic_pairs(5, 2)

@@ -36,6 +36,7 @@ from dental_image_organizer.services.batch_io import (
     MTIME_WARNING,
     capture_time,
     load_photo,
+    load_photo_with_id,
     os_error_message,
     unexpected_message,
     write_unique,
@@ -131,10 +132,14 @@ class _AiState:
 
 @dataclass(frozen=True)
 class _Working:
-    """A decoded photo kept as a small working copy; `number` is its 1-based input position."""
+    """A decoded photo kept as a small working copy.
+
+    `number` is its 1-based input position; `photo_id` is the SHA-256 of its file.
+    """
 
     number: int
     source: Path
+    photo_id: str
     image: RGBImage
     taken: datetime
     from_file: bool
@@ -221,7 +226,12 @@ def run_composite(
         # _resolve_ai always creates an embedder for --learn, or raises.
         assert ai.embedder is not None and embeddings is not None
         placed = [plan.cells[slot].photo for slot in rendered]
-        trained = _learn(embeddings.take(placed), list(rendered), ai.embedder.model_hash)
+        trained = _learn(
+            embeddings.take(placed),
+            list(rendered),
+            [workings[i].photo_id for i in placed],
+            ai.embedder.model_hash,
+        )
         learned = len(placed)
 
     return CompositeReport(
@@ -301,7 +311,8 @@ def _load_working(number: int, path: Path) -> _Working | PhotoOutcome:
     Only the working copy outlives this call, so one full-size photo is in memory at a time.
     """
     try:
-        photo = load_photo(path)
+        # The id is hashed from the bytes read for this decode, so no file is read twice here.
+        photo, photo_id = load_photo_with_id(path)
         taken, from_file = capture_time(photo, path)
         image, _ = resize_long_edge(photo.rgb, WORKING_LONG_EDGE)
     except UnsupportedFormatError as exc:
@@ -317,7 +328,7 @@ def _load_working(number: int, path: Path) -> _Working | PhotoOutcome:
         # or a MemoryError must fail only this photo.
         log.exception("photo_unreadable")
         return PhotoOutcome(path, "failed", message=unexpected_message(exc))
-    return _Working(number, path, image, taken, from_file)
+    return _Working(number, path, photo_id, image, taken, from_file)
 
 
 def _render_full(path: Path, cell: CellPlan) -> RGBImage | PhotoOutcome:
@@ -350,13 +361,16 @@ def _cell_outcome(cell: CellPlan, source: Path) -> CellOutcome:
     )
 
 
-def _learn(pairs: EmbeddingPair, slots: Sequence[Slot], model_hash: str) -> bool:
+def _learn(
+    pairs: EmbeddingPair, slots: Sequence[Slot], photo_ids: Sequence[str], model_hash: str
+) -> bool:
     """Store the placed photos as confirmed samples and retrain; True once the classifier is."""
     directory = paths.classifier_dir()
-    # A random case id keeps patient names out of the data folder.
+    # A random case id and content-hash photo ids keep patient names out of the data folder.
     samples = SampleStore(directory).append(
         pairs,
         slots,
+        photo_ids=photo_ids,
         case_id=uuid.uuid4().hex,
         source="export",
         model_hash=model_hash,

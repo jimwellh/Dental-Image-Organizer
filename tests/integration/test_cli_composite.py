@@ -1,3 +1,4 @@
+import hashlib
 import io
 import shutil
 from pathlib import Path
@@ -17,6 +18,7 @@ from dental_image_organizer.core.geometry import flip_pixels
 from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS
 from dental_image_organizer.errors import ModelUnavailableError
 from dental_image_organizer.ml.model_store import ModelSpec
+from dental_image_organizer.ml.samples import SampleStore
 from dental_image_organizer.services import composite, headless_composite
 from dental_image_organizer.services.headless_composite import (
     DAMAGED_CLASSIFIER_NOTE,
@@ -37,14 +39,20 @@ def _jpeg(rgb: np.ndarray, taken: str) -> bytes:
     return buf.getvalue()
 
 
-@pytest.fixture(scope="module")
-def set_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """One session shot in row-major slot order, as the camera stored it, plus a video."""
-    folder = tmp_path_factory.mktemp("set")
+def _write_set(folder: Path, seed: int) -> Path:
+    """One session shot in row-major slot order, as the camera stored it."""
+    folder.mkdir(parents=True, exist_ok=True)
     for i, slot in enumerate(SLOTS):
-        view = flip_pixels(make_view(slot, 70 + i, angle=3.0), DEFAULT_FLIPS[slot])
+        view = flip_pixels(make_view(slot, seed + i, angle=3.0), DEFAULT_FLIPS[slot])
         taken = f"2026:10:16 10:00:{10 + i:02d}"
         (folder / f"IMG_{i + 1:04d}.jpg").write_bytes(_jpeg(view, taken))
+    return folder
+
+
+@pytest.fixture(scope="module")
+def set_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One session plus a video, which is skipped."""
+    folder = _write_set(tmp_path_factory.mktemp("set"), 70)
     (folder / "IMG_0099.MOV").write_bytes(VIDEO)
     return folder
 
@@ -150,12 +158,14 @@ def test_three_learned_sets_train_the_classifier(
 ) -> None:
     _install_fake_model(tmp_path, monkeypatch)
     out = tmp_path / "out"
+    second_set = _write_set(tmp_path / "set2", 80)
+    third_set = _write_set(tmp_path / "set3", 90)
 
     first = _invoke(set_dir, out, "--learn")
     assert first.exit_code == 0, first.output
     assert "the AI classifier is not trained yet" in first.output
-    assert _invoke(set_dir, out, "--learn").exit_code == 0
-    third = _invoke(set_dir, out, "--learn")
+    assert _invoke(second_set, out, "--learn").exit_code == 0
+    third = _invoke(third_set, out, "--learn")
     assert third.exit_code == 0, third.output
     assert "the AI classifier is trained" in third.output
 
@@ -163,6 +173,28 @@ def test_three_learned_sets_train_the_classifier(
     assert fourth.exit_code == 0, fourth.output
     assert "Slots were assigned by shooting order" not in fourth.output
     assert (tmp_path / "data" / "classifier" / "model.json").exists()
+
+
+def test_relearning_a_set_replaces_its_earlier_labels(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    out = tmp_path / "out"
+    # Confirmed by mistake with the wrong shooting order, then corrected and confirmed again.
+    wrong = _invoke(set_dir, out, "--learn", "--order", ",".join(reversed(SLOTS)))
+    assert wrong.exit_code == 0, wrong.output
+
+    fixed = _invoke(set_dir, out, "--learn")
+
+    assert fixed.exit_code == 0, fixed.output
+    assert "the AI classifier is not trained yet" in fixed.output
+    samples = SampleStore(tmp_path / "data" / "classifier").load()
+    expected = {
+        hashlib.sha256((set_dir / f"IMG_{i + 1:04d}.jpg").read_bytes()).hexdigest(): slot
+        for i, slot in enumerate(SLOTS)
+    }
+    assert dict(zip(samples.photo_ids, samples.slots, strict=True)) == expected
+    assert len(samples.slots) == 9
 
 
 def test_download_is_announced_and_only_with_consent(

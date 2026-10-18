@@ -26,8 +26,11 @@ _log = structlog.get_logger(__name__)
 
 @dataclass(frozen=True)
 class SampleSet:
+    """`photo_ids` are SHA-256 hashes of the photo files: they identify a photo without its name."""
+
     pairs: EmbeddingPair
     slots: tuple[Slot, ...]
+    photo_ids: tuple[str, ...]
     case_ids: tuple[str, ...]
     sources: tuple[SampleSource, ...]
     timestamps: npt.NDArray[np.float64]
@@ -35,13 +38,16 @@ class SampleSet:
 
     def for_model(self, model_hash: str) -> SampleSet:
         # Embeddings from another model live in a different space and must never be mixed in.
-        keep = [i for i, h in enumerate(self.model_hashes) if h == model_hash]
+        return self.take([i for i, h in enumerate(self.model_hashes) if h == model_hash])
+
+    def take(self, keep: Sequence[int]) -> SampleSet:
         return SampleSet(
             self.pairs.take(keep),
             tuple(self.slots[i] for i in keep),
+            tuple(self.photo_ids[i] for i in keep),
             tuple(self.case_ids[i] for i in keep),
             tuple(self.sources[i] for i in keep),
-            self.timestamps[keep],
+            self.timestamps[np.asarray(keep, dtype=np.intp)],
             tuple(self.model_hashes[i] for i in keep),
         )
 
@@ -54,7 +60,7 @@ class SampleSet:
 
 def empty_samples() -> SampleSet:
     empty = np.empty((0, EMBEDDING_DIM), np.float32)
-    return SampleSet(EmbeddingPair(empty, empty), (), (), (), np.empty(0, np.float64), ())
+    return SampleSet(EmbeddingPair(empty, empty), (), (), (), (), np.empty(0, np.float64), ())
 
 
 class SampleStore:
@@ -74,6 +80,7 @@ class SampleStore:
                         data["original"].astype(np.float32), data["mirrored"].astype(np.float32)
                     ),
                     cast("tuple[Slot, ...]", tuple(data["slots"].tolist())),
+                    tuple(data["photo_ids"].tolist()),
                     tuple(data["case_ids"].tolist()),
                     cast("tuple[SampleSource, ...]", tuple(data["sources"].tolist())),
                     data["timestamps"].astype(np.float64),
@@ -93,12 +100,31 @@ class SampleStore:
         pairs: EmbeddingPair,
         slots: Sequence[Slot],
         *,
+        photo_ids: Sequence[str],
         case_id: str,
         source: SampleSource,
         model_hash: str,
         timestamp: float,
     ) -> SampleSet:
-        old = self.load()
+        """Add confirmed samples; a photo already stored for this model gets its new label."""
+        if not len(pairs) == len(slots) == len(photo_ids):
+            raise ValueError(
+                f"got {len(pairs)} embeddings for {len(slots)} labels and "
+                f"{len(photo_ids)} photo ids"
+            )
+        stored = self.load()
+        # Re-confirming a corrected set must replace its earlier labels, not contradict them,
+        # and must not count the same photos twice toward the trained state.
+        relabeled = set(photo_ids)
+        old = stored.take(
+            [
+                i
+                for i, (photo, model) in enumerate(
+                    zip(stored.photo_ids, stored.model_hashes, strict=True)
+                )
+                if model != model_hash or photo not in relabeled
+            ]
+        )
         added = len(slots)
         merged = SampleSet(
             EmbeddingPair(
@@ -106,6 +132,7 @@ class SampleStore:
                 np.concatenate([old.pairs.mirrored, pairs.mirrored]),
             ),
             (*old.slots, *slots),
+            (*old.photo_ids, *photo_ids),
             (*old.case_ids, *([case_id] * added)),
             (*old.sources, *([source] * added)),
             np.concatenate([old.timestamps, np.full(added, timestamp, np.float64)]),
@@ -124,6 +151,7 @@ class SampleStore:
                 original=samples.pairs.original.astype(np.float16),
                 mirrored=samples.pairs.mirrored.astype(np.float16),
                 slots=np.array(samples.slots, dtype=str),
+                photo_ids=np.array(samples.photo_ids, dtype=str),
                 case_ids=np.array(samples.case_ids, dtype=str),
                 sources=np.array(samples.sources, dtype=str),
                 timestamps=samples.timestamps,
@@ -142,6 +170,7 @@ def _check_consistent(samples: SampleSet) -> None:
         len(samples.pairs.original),
         len(samples.pairs.mirrored),
         count,
+        len(samples.photo_ids),
         len(samples.case_ids),
         len(samples.sources),
         len(samples.timestamps),

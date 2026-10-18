@@ -93,7 +93,9 @@ uv run dio composite IMG_*.HEIC --out export --patient "Alex Wang" --tag "full m
 ```
 
 `--learn` stores a checked run as classifier samples, and the first such run needs
-`--download-model` (about 24 MB, once, from this repository's GitHub Releases).
+`--download-model` (about 24 MB, once, from this repository's GitHub Releases). To reset the
+classifier, delete the `classifier` folder in the app data directory (on macOS,
+`~/Library/Application Support/DentalImageOrganizer/classifier`).
 
 ### Golden photos (local only)
 

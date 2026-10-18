@@ -522,6 +522,8 @@ same original-minus-mirror feature; this is an independent re-implementation.
     `source` (`export | teach`), timestamps);
   - model → `classifier/model.json` (both heads' coefficients and intercepts, class order,
     embedding model hash).
+  - Samples also carry a photo id (the SHA-256 of the photo file), and confirming the same photo
+    again replaces its earlier label.
 - Samples carry the embedding-model hash. If the model changes, old samples are ignored and the
   user is told to re-confirm a few cases.
 - Retraining runs in the background after each composite export and each confirmed teaching set;

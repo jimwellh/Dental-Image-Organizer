@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +18,13 @@ MTIME_WARNING = "No capture time in EXIF; used the file modification time."
 
 def load_photo(path: Path) -> DecodedImage:
     return decode(path.read_bytes())
+
+
+def load_photo_with_id(path: Path) -> tuple[DecodedImage, str]:
+    """Decode a photo, with the SHA-256 of its bytes: an id that carries no file name."""
+    data = path.read_bytes()
+    photo = decode(data)
+    return photo, hashlib.sha256(data).hexdigest()
 
 
 def os_error_message(exc: OSError) -> str:

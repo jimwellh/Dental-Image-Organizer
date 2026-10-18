@@ -136,6 +136,8 @@ def train_classifier(
     *,
     regularization: float = CLASSIFIER_C,
 ) -> SlotClassifier | None:
+    if len(pair) != len(slots):
+        raise ValueError(f"got {len(pair)} embeddings for {len(slots)} labels")
     counts = dict.fromkeys(SLOTS, 0)
     for slot in slots:
         counts[slot] += 1
