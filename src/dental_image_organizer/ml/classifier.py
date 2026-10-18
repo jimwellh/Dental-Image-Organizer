@@ -28,7 +28,6 @@ from dental_image_organizer.ml.embedder import EMBEDDING_DIM, EmbeddingPair
 MIN_SAMPLES_PER_SLOT = 3
 CLASSIFIER_C = 10.0  # spec amendment 1
 MAX_ITERATIONS = 2000
-LATERAL_GROUPS = ("upper_buccal", "occlusion_side", "lower_buccal")
 
 _log = structlog.get_logger(__name__)
 Floats = npt.NDArray[np.float64]

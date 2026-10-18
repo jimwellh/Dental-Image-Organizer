@@ -222,7 +222,7 @@ A **Downloads-folder watcher** (auto-import of new AirDrop arrivals) is a post-M
 
 | Concern | Choice |
 |---|---|
-| Runtime | Python **3.12** (`requires-python = ">=3.12"`), environment and Python provisioning by `uv` |
+| Runtime | Python **3.12** (`requires-python = ">=3.12,<3.15"`), environment and Python provisioning by `uv`. The cap keeps `uv` from picking a Python that `onnxruntime` ships no wheel for (1.31.0 has none for 3.15); raise it when one ships. |
 | Web | FastAPI + Uvicorn, Pydantic v2 |
 | CLI | Typer |
 | Logging | structlog: JSON lines to a rotating file (5 × 5 MB) and human-readable console output; levels DEBUG / INFO / WARNING / ERROR |

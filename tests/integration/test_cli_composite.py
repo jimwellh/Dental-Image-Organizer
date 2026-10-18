@@ -18,14 +18,19 @@ from typer.testing import CliRunner
 from dental_image_organizer import paths
 from dental_image_organizer.cli import app
 from dental_image_organizer.core.geometry import flip_pixels
-from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS
+from dental_image_organizer.core.slots import DEFAULT_FLIPS, GROUPS, SLOTS
 from dental_image_organizer.errors import ModelUnavailableError
+from dental_image_organizer.ml.classifier import SlotClassifier
+from dental_image_organizer.ml.embedder import EMBEDDING_DIM, Embedder
 from dental_image_organizer.ml.model_store import ModelSpec
 from dental_image_organizer.ml.samples import SampleStore
 from dental_image_organizer.services import composite, headless_composite
 from dental_image_organizer.services.headless_composite import (
     DAMAGED_CLASSIFIER_NOTE,
+    DUPLICATE_PHOTO_NOTE,
+    CompositeOptions,
     find_photo,
+    resolve_assign,
     run_composite,
 )
 from support.fake_model import build_fake_model
@@ -127,7 +132,29 @@ def test_empty_slots_and_a_baseline_fallback_are_reported(set_dir: Path, tmp_pat
     assert [line.split()[0] for line in lines[:9]] == list(SLOTS)
     assert lines[8] == f"{'lower_left':<16} {'':>5}  (empty)"
     assert "IMG_0009.jpg" in _lines(result)["tray"]
-    assert "Colors were matched to upper_right because lower_left has no photo." in lines
+    assert "Colors were matched to upper_right because lower_left has no usable photo." in lines
+
+
+def test_a_baseline_photo_that_fails_is_reported_as_unusable(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_normalize_view = composite.normalize_view
+
+    def normalize_failing_on_the_baseline(image: np.ndarray, slot: str, *rest: Any) -> Any:
+        if slot == "occlusion_front":
+            raise ValueError("synthetic leveling failure")
+        return real_normalize_view(image, slot, *rest)
+
+    monkeypatch.setattr(composite, "normalize_view", normalize_failing_on_the_baseline)
+
+    result = _invoke(set_dir, tmp_path / "out")
+
+    assert result.exit_code == 1, result.output
+    assert "IMG_0005.jpg: Unexpected ValueError" in _lines(result)["failed"]
+    assert (
+        "Colors were matched to upper_right because occlusion_front has no usable photo."
+        in result.output.splitlines()
+    )
 
 
 def test_nothing_is_written_when_no_photo_could_be_placed(
@@ -203,6 +230,72 @@ def test_assign_names_match_by_file_name_or_path(tmp_path: Path) -> None:
         find_photo(str(tmp_path / "IMG_0002.jpg"), photos)
 
 
+def test_resolve_assign_rejects_a_photo_named_twice_or_two_photos_in_one_slot(
+    tmp_path: Path,
+) -> None:
+    photos = [tmp_path / "IMG_0001.jpg", tmp_path / "IMG_0002.jpg"]
+    for photo in photos:
+        photo.write_bytes(b"photo")
+
+    assert resolve_assign([("IMG_0002.jpg", "upper_left"), ("IMG_0001.jpg", None)], photos) == {
+        1: "upper_left",
+        0: None,
+    }
+    # A file name and a path to the same file name one photo.
+    with pytest.raises(ValueError, match=re.escape("'IMG_0001.jpg' is assigned twice")):
+        resolve_assign([(str(photos[0]), None), ("IMG_0001.jpg", "upper_left")], photos)
+    with pytest.raises(ValueError, match="two files are assigned to upper_left"):
+        resolve_assign([("IMG_0001.jpg", "upper_left"), ("IMG_0002.jpg", "upper_left")], photos)
+
+
+def test_the_service_takes_assignments_by_input_index(set_dir: Path, tmp_path: Path) -> None:
+    photos = sorted(set_dir.glob("*.jpg"))
+
+    report = run_composite(
+        photos,
+        tmp_path / "out",
+        patient="A",
+        tag="B",
+        options=CompositeOptions(assign={0: "upper_left"}),
+    )
+
+    cells = {cell.slot: cell.source.name for cell in report.cells}
+    assert cells["upper_left"] == "IMG_0001.jpg" and cells["upper_right"] == "IMG_0003.jpg"
+
+
+@pytest.mark.parametrize(
+    "assign",
+    [{9: "upper_left"}, {0: "upper_left", 1: "upper_left"}],
+    ids=["out-of-range", "one-slot-twice"],
+)
+def test_a_bad_assignment_fails_before_any_work(
+    set_dir: Path, tmp_path: Path, assign: dict[int, Any]
+) -> None:
+    photos = sorted(set_dir.glob("*.jpg"))
+
+    with pytest.raises(ValueError):
+        run_composite(
+            photos, tmp_path / "out", patient="A", tag="B", options=CompositeOptions(assign=assign)
+        )
+    assert not (tmp_path / "out").exists()
+
+
+def test_photos_are_hashed_only_to_learn(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hashed: list[Path] = []
+    real_load_photo_with_id = headless_composite.load_photo_with_id
+
+    def spy(path: Path) -> Any:
+        hashed.append(path)
+        return real_load_photo_with_id(path)
+
+    monkeypatch.setattr(headless_composite, "load_photo_with_id", spy)
+
+    assert _invoke(set_dir, tmp_path / "out").exit_code == 0
+    assert hashed == []
+
+
 def test_custom_order_changes_the_placement(set_dir: Path, tmp_path: Path) -> None:
     result = _invoke(set_dir, tmp_path / "out", "--order", ",".join(reversed(SLOTS)))
 
@@ -250,6 +343,8 @@ def test_three_learned_sets_train_the_classifier(
     first = _invoke(set_dir, out, "--learn")
     assert first.exit_code == 0, first.output
     assert "the AI classifier is not trained yet" in first.output
+    # This run is the one that teaches it.
+    assert "rerun with --learn" not in first.output
     assert _invoke(second_set, out, "--learn").exit_code == 0
     third = _invoke(third_set, out, "--learn")
     assert third.exit_code == 0, third.output
@@ -281,6 +376,48 @@ def test_relearning_a_set_replaces_its_earlier_labels(
     }
     assert dict(zip(samples.photo_ids, samples.slots, strict=True)) == expected
     assert len(samples.slots) == 9
+
+
+def test_a_failed_sample_write_still_reports_the_written_composite(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+
+    def disk_full(self: SampleStore, _: Any) -> None:
+        raise OSError(28, "No space left on device", str(self.path))
+
+    monkeypatch.setattr(SampleStore, "_write", disk_full)
+
+    result = _invoke(set_dir, tmp_path / "out", "--learn")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert f"-> {OUTPUT}" in _lines(result)["composite"]
+    assert (
+        "Learning failed: No space left on device. The composite was written; nothing was learned."
+        in result.output.splitlines()
+    )
+    # The data folder sits in the user's home folder.
+    assert str(tmp_path) not in result.output
+
+
+def test_one_photo_placed_in_two_slots_is_not_learned(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    retake = tmp_path / "retakes" / "IMG_0001.jpg"
+    retake.parent.mkdir()
+    retake.write_bytes((set_dir / "IMG_0001.jpg").read_bytes())
+    photos = [*sorted(set_dir.glob("*.jpg")), retake]
+
+    result = _invoke_photos(photos, tmp_path / "out", "--learn", "--assign", f"{retake}=upper_left")
+
+    assert result.exit_code == 0, result.output
+    assert DUPLICATE_PHOTO_NOTE in result.output
+    assert "Learned 7 samples" in result.output
+    samples = SampleStore(tmp_path / "data" / "classifier").load()
+    assert len(samples.photo_ids) == len(set(samples.photo_ids)) == 7
+    assert hashlib.sha256(retake.read_bytes()).hexdigest() not in samples.photo_ids
 
 
 def test_download_is_announced_and_only_with_consent(
@@ -326,6 +463,77 @@ def test_failed_download_falls_back_to_shooting_order(
     assert (tmp_path / "out" / OUTPUT).exists()
 
 
+def _install_classifier(tmp_path: Path) -> None:
+    """A trained classifier for the installed fake model, so a run needs the model."""
+    d, g = EMBEDDING_DIM, len(GROUPS)
+    model_hash = headless_composite.DEFAULT_MODEL.sha256
+    SlotClassifier(model_hash, GROUPS, np.zeros((g, d)), np.zeros(g), np.zeros(d)).save(
+        tmp_path / "data" / "classifier" / "model.json"
+    )
+
+
+def test_a_model_that_cannot_be_loaded_falls_back_to_shooting_order(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    _install_classifier(tmp_path)
+
+    def broken_runtime(*_: Any) -> Any:
+        raise ModelUnavailableError("Cannot load the AI model: broken runtime")
+
+    monkeypatch.setattr(headless_composite, "Embedder", broken_runtime)
+
+    result = _invoke(set_dir, tmp_path / "out")
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Cannot load the AI model: broken runtime Slots were assigned by shooting order."
+        in result.output
+    )
+    assert "IMG_0001.jpg" in _lines(result)["upper_right"]
+    assert (tmp_path / "out" / OUTPUT).exists()
+
+
+def _fail_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    def out_of_memory(*_: Any) -> Any:
+        # onnxruntime raises its own exception types, which are not DioError or OSError.
+        raise RuntimeError("allocation failed")
+
+    monkeypatch.setattr(Embedder, "embed", out_of_memory)
+
+
+def test_a_model_that_fails_on_the_photos_falls_back_to_shooting_order(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    _install_classifier(tmp_path)
+    _fail_inference(monkeypatch)
+
+    result = _invoke(set_dir, tmp_path / "out")
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Running the AI model failed: Unexpected RuntimeError: allocation failed "
+        "Slots were assigned by shooting order." in result.output
+    )
+    assert "IMG_0001.jpg" in _lines(result)["upper_right"]
+    assert (tmp_path / "out" / OUTPUT).exists()
+
+
+def test_learning_stops_before_any_output_when_the_model_fails_on_the_photos(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    _fail_inference(monkeypatch)
+
+    result = _invoke(set_dir, tmp_path / "out", "--learn")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert "error: Running the AI model failed: Unexpected RuntimeError" in result.output
+    assert not (tmp_path / "out").exists()
+
+
 # IMG_0001 has no decoded photo before it, so its rank comes from the one after it.
 @pytest.mark.parametrize("broken", [5, 1])
 def test_corrupt_photo_leaves_its_slot_empty(set_dir: Path, tmp_path: Path, broken: int) -> None:
@@ -344,6 +552,62 @@ def test_corrupt_photo_leaves_its_slot_empty(set_dir: Path, tmp_path: Path, brok
     for number, slot in enumerate(SLOTS, start=1):
         expected = "(empty)" if number == broken else f"IMG_{number:04d}.jpg"
         assert expected in lines[slot], lines[slot]
+
+
+def test_an_unreadable_photo_ranks_by_file_name_whatever_the_input_order(
+    set_dir: Path, tmp_path: Path
+) -> None:
+    copy = tmp_path / "set"
+    shutil.copytree(set_dir, copy)
+    # Nothing past the JPEG marker: no capture time survives.
+    (copy / "IMG_0005.jpg").write_bytes(b"\xff\xd8\xff\xe0" + bytes(20))
+    # Finder hands over a selection in the order it was clicked, not by name.
+    photos = sorted(copy.glob("*.jpg"), reverse=True)
+
+    result = _invoke_photos(photos, tmp_path / "out")
+
+    assert result.exit_code == 1, result.output
+    lines = _lines(result)
+    assert "IMG_0005.jpg: " in lines["failed"]
+    for number, slot in enumerate(SLOTS, start=1):
+        expected = "(empty)" if number == 5 else f"IMG_{number:04d}.jpg"
+        assert expected in lines[slot], lines[slot]
+
+
+def test_an_unreadable_retake_with_the_same_name_ranks_after_the_original(
+    set_dir: Path, tmp_path: Path
+) -> None:
+    retake = tmp_path / "retakes" / "IMG_0009.jpg"
+    retake.parent.mkdir()
+    retake.write_bytes(b"\xff\xd8\xff\xe0" + bytes(20))
+    photos = [*sorted(set_dir.glob("*.jpg")), retake]
+
+    result = _invoke_photos(photos, tmp_path / "out")
+
+    assert result.exit_code == 1, result.output
+    lines = _lines(result)
+    assert "IMG_0009.jpg" in lines["lower_left"], lines["lower_left"]
+    assert "tray" not in lines
+
+
+def test_an_unreadable_photo_ranks_by_the_capture_time_left_in_its_header(
+    set_dir: Path, tmp_path: Path
+) -> None:
+    copy = tmp_path / "set"
+    shutil.copytree(set_dir, copy)
+    first = (copy / "IMG_0001.jpg").read_bytes()
+    (copy / "IMG_0001.jpg").unlink()
+    # A name that sorts last: only the EXIF header can tell that it was shot first.
+    (copy / "IMG_0100.jpg").write_bytes(first[: len(first) // 2])
+
+    result = _invoke(copy, tmp_path / "out")
+
+    assert result.exit_code == 1, result.output
+    lines = _lines(result)
+    assert "IMG_0100.jpg: " in lines["failed"]
+    assert lines["upper_right"].endswith("(empty)")
+    for number, slot in enumerate(SLOTS[1:], start=2):
+        assert f"IMG_{number:04d}.jpg" in lines[slot], lines[slot]
 
 
 @pytest.mark.usefixtures("debug_logging")

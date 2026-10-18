@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from dental_image_organizer.core import transform as tf
 from dental_image_organizer.core.color import LabAffine, apply_lab_transform, fit_reinhard, to_lab
@@ -49,6 +50,26 @@ def test_mean_shift_is_clamped() -> None:
     moved = affine.apply_lab(before).astype(np.float64).mean(axis=0) - before.mean(axis=0)
     assert abs(moved[0]) <= 0.8 * 12.0 + 1e-3
     assert np.all(np.abs(moved[1:]) <= 0.8 * 8.0 + 1e-3)
+
+
+@pytest.mark.parametrize("tiny_side", ["source", "target"])
+def test_a_near_empty_mask_sends_both_cells_to_whole_frame_statistics(tiny_side: str) -> None:
+    baseline = make_scene(4, 1200, 800)
+    other = grade(baseline, gain=0.85, warm=-8.0)
+    tiny = np.zeros(other.shape[:2], bool)
+    tiny[:10, :10] = True
+    whole = np.ones(other.shape[:2], bool)
+    source_mask, target_mask = (
+        (tiny, _region(baseline)) if tiny_side == "source" else (_region(other), tiny)
+    )
+
+    affine = fit_reinhard(other, source_mask, baseline, target_mask)
+
+    # Whole-frame statistics on one side against tooth and gingiva on the other would shift
+    # the cell by the difference between the regions, not between the photos.
+    expected = fit_reinhard(other, whole, baseline, whole)
+    np.testing.assert_allclose(affine.gains, expected.gains, rtol=1e-9)
+    np.testing.assert_allclose(affine.offsets, expected.offsets, rtol=1e-9, atol=1e-9)
 
 
 def test_affine_params_round_trip() -> None:

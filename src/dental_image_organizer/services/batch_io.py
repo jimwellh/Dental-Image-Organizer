@@ -8,7 +8,7 @@ from pathlib import Path
 
 import structlog
 
-from dental_image_organizer.core.imageio import DecodedImage, decode
+from dental_image_organizer.core.imageio import DecodedImage, decode, read_capture_time
 from dental_image_organizer.core.naming import unique_name
 
 log = structlog.get_logger(__name__)
@@ -46,6 +46,14 @@ def capture_time(image: DecodedImage, path: Path) -> tuple[datetime, bool]:
         return image.metadata.captured_at, False
     log.warning("capture_time_from_file")
     return datetime.fromtimestamp(path.stat().st_mtime), True
+
+
+def header_capture_time(path: Path) -> datetime | None:
+    """The EXIF capture time left in the header of a photo that failed to decode, if any."""
+    try:
+        return read_capture_time(path.read_bytes())
+    except OSError:
+        return None
 
 
 def write_unique(out_dir: Path, taken: set[str], name: str, data: bytes) -> Path:

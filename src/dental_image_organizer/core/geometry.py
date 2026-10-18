@@ -48,13 +48,15 @@ _DARK_ROW_SPAN = (0.2, 0.8)
 _DARK_ROW_BLUR = (1, 9)
 _BISECTION_STEPS = 30
 
-# x, y, width, height in leveled photo pixels.
+# (x, y, width, height) in leveled photo pixels, not analysis pixels: masks are measured on the
+# small copy, but a crop must stay exact when the full-resolution photo is rendered.
 Rect = tuple[float, float, float, float]
 Edge = Literal["top", "bottom"]
 FloatPoints = npt.NDArray[np.float64]
 Lightness = npt.NDArray[np.float32]
 
-# (mirror x, mirror y) for each flip.
+# Every flip is a pair of axis mirrors (rotate_180 is both), so flip_pixels and flip_matrix
+# read (mirror x, mirror y) from one table and cannot disagree.
 _MIRRORS: dict[Flip, tuple[bool, bool]] = {
     "none": (False, False),
     "horizontal": (True, False),

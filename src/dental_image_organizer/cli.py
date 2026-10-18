@@ -16,7 +16,7 @@ from dental_image_organizer.services.headless import PhotoOutcome, ProcedureRepo
 from dental_image_organizer.services.headless_composite import (
     CompositeOptions,
     CompositeReport,
-    find_photo,
+    resolve_assign,
     run_composite,
 )
 from dental_image_organizer.services.procedure import OUTPUT_SCALES
@@ -207,9 +207,8 @@ def _parse_flips(items: Iterable[str]) -> dict[Slot, Flip]:
     return flips
 
 
-def _parse_assign(items: Iterable[str], photos: Sequence[Path]) -> dict[str, Slot | None]:
-    assign: dict[str, Slot | None] = {}
-    chosen: set[int] = set()
+def _parse_assign(items: Iterable[str], photos: Sequence[Path]) -> dict[int, Slot | None]:
+    entries: list[tuple[str, Slot | None]] = []
     for item in items:
         # File names may contain "=", slot names never do.
         name, sep, target = item.rpartition("=")
@@ -217,18 +216,12 @@ def _parse_assign(items: Iterable[str], photos: Sequence[Path]) -> dict[str, Slo
             raise typer.BadParameter(
                 f"expected FILE=SLOT or FILE=tray, got {item!r}", param_hint="--assign"
             )
-        try:
-            photo = find_photo(name, photos)
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc), param_hint="--assign") from exc
-        if photo in chosen:
-            raise typer.BadParameter(f"{name!r} is assigned twice", param_hint="--assign")
         slot = None if target.strip() == "tray" else _parse_slot_option(target, "--assign")
-        if slot is not None and slot in assign.values():
-            raise typer.BadParameter(f"two files are assigned to {slot}", param_hint="--assign")
-        chosen.add(photo)
-        assign[name] = slot
-    return assign
+        entries.append((name, slot))
+    try:
+        return resolve_assign(entries, photos)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--assign") from exc
 
 
 def _print_composite(report: CompositeReport, *, learn: bool, baseline: Slot) -> None:
@@ -255,12 +248,20 @@ def _print_composite(report: CompositeReport, *, learn: bool, baseline: Slot) ->
     else:
         typer.echo(f"{'composite':<16} {'':>5}  -> {report.output.name}")
         if report.baseline is not None and report.baseline != baseline:
-            typer.echo(f"Colors were matched to {report.baseline} because {baseline} has no photo.")
+            typer.echo(
+                f"Colors were matched to {report.baseline} because {baseline} has no usable photo."
+            )
     for note in report.notes:
         typer.echo(note)
     if learn and report.output is not None:
-        state = "trained" if report.trained else "not trained yet"
-        typer.echo(f"Learned {report.learned} samples; the AI classifier is {state}.")
+        if report.learn_error is not None:
+            typer.echo(
+                f"Learning failed: {report.learn_error}. "
+                "The composite was written; nothing was learned."
+            )
+        else:
+            state = "trained" if report.trained else "not trained yet"
+            typer.echo(f"Learned {report.learned} samples; the AI classifier is {state}.")
     _print_skips(report.problems)
 
 

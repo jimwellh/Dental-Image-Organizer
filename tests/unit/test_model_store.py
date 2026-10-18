@@ -7,6 +7,7 @@ import pytest
 from structlog.testing import capture_logs
 
 from dental_image_organizer.errors import ModelIntegrityError, ModelUnavailableError
+from dental_image_organizer.ml import model_store
 from dental_image_organizer.ml.model_store import (
     DEFAULT_MODEL,
     ModelSpec,
@@ -94,6 +95,25 @@ def test_cached_file_with_a_wrong_hash_is_deleted(tmp_path: Path) -> None:
 
     assert cached_model(_spec(b"fresh"), tmp_path) is None
     assert not (tmp_path / "m.onnx").exists()
+
+
+def test_an_unreadable_cached_file_is_unavailable_and_names_no_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = tmp_path / "Alex Wang"
+    cache.mkdir()
+    (cache / "m.onnx").write_bytes(b"model")
+
+    def locked(path: Path) -> str:
+        # Another process holding the file open on Windows, or a failing disk.
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(model_store, "sha256_file", locked)
+
+    with pytest.raises(ModelUnavailableError) as info:
+        cached_model(_spec(b"model"), cache)
+
+    assert str(info.value) == "Reading the cached AI model failed: Permission denied"
 
 
 def test_sha256_file(tmp_path: Path) -> None:

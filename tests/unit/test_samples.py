@@ -69,6 +69,17 @@ def test_embeddings_labels_and_photo_ids_must_match_in_number(tmp_path: Path) ->
     assert not (tmp_path / "samples.npz").exists()
 
 
+def test_one_photo_cannot_take_two_labels_in_one_append(tmp_path: Path) -> None:
+    pair, slots = synthetic_pairs(1, 3)
+    ids = [*IDS[:8], IDS[0]]
+
+    with pytest.raises(ValueError, match="photo-0"):
+        SampleStore(tmp_path).append(
+            pair, slots, photo_ids=ids, case_id="a", source="teach", model_hash="h", timestamp=1
+        )
+    assert not (tmp_path / "samples.npz").exists()
+
+
 def _truncate(path: Path) -> None:
     path.write_bytes(path.read_bytes()[: path.stat().st_size // 2])
 

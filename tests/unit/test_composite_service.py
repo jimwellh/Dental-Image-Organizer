@@ -5,17 +5,10 @@ import numpy as np
 import pytest
 
 from dental_image_organizer.core.geometry import flip_pixels
-from dental_image_organizer.core.slots import DEFAULT_FLIPS, GROUPS, SLOTS
+from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS
 from dental_image_organizer.ml.assignment import assign_by_order
-from dental_image_organizer.ml.classifier import SlotClassifier
-from dental_image_organizer.ml.embedder import EMBEDDING_DIM, EmbeddingPair
 from dental_image_organizer.services import composite
-from dental_image_organizer.services.composite import (
-    assign_photos,
-    compose,
-    plan_composite,
-    render_cell,
-)
+from dental_image_organizer.services.composite import compose, plan_composite, render_cell
 from support.synthetic import grade
 from support.views import make_view
 
@@ -58,6 +51,14 @@ def test_positions_must_label_every_image(raw_set: list[np.ndarray]) -> None:
         plan_composite(
             raw_set, assign_by_order(TIMES[:9], SLOTS), flips=DEFAULT_FLIPS, positions=[1]
         )
+
+
+def test_a_slot_left_out_of_the_flips_keeps_its_default_flip(raw_set: list[np.ndarray]) -> None:
+    plan = plan_composite(raw_set, assign_by_order(TIMES[:9], SLOTS), flips={"upper_right": "none"})
+
+    assert list(plan.cells) == list(SLOTS) and plan.failed == {}
+    assert plan.cells["upper_right"].geometry.flip == "none"
+    assert all(plan.cells[s].geometry.flip == DEFAULT_FLIPS[s] for s in SLOTS[1:])
 
 
 def test_a_tenth_photo_goes_to_the_tray(raw_set: list[np.ndarray]) -> None:
@@ -134,15 +135,3 @@ def test_composite_is_three_by_three_cells(raw_set: list[np.ndarray]) -> None:
     )
 
     assert grid.shape == (2400, 3600, 3)
-
-
-def test_classifier_is_used_only_with_embeddings() -> None:
-    d = EMBEDDING_DIM
-    classifier = SlotClassifier("h", GROUPS, np.zeros((6, d)), np.zeros(6), np.zeros(d))
-    pair = EmbeddingPair(np.zeros((1, d), np.float32), np.zeros((1, d), np.float32))
-
-    assert assign_photos(TIMES[:1], SLOTS, classifier=classifier).method == "order"
-    assert (
-        assign_photos(TIMES[:1], SLOTS, classifier=classifier, embeddings=pair).method
-        == "classifier"
-    )

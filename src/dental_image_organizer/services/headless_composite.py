@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 import unicodedata
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,16 +34,24 @@ from dental_image_organizer.errors import (
 from dental_image_organizer.ml.assignment import (
     Assignment,
     AssignMethod,
-    assign_by_order,
+    assign_by_classifier,
+    check_overrides,
+    shooting_rank,
     with_overrides,
 )
-from dental_image_organizer.ml.classifier import SlotClassifier, load_classifier, train_classifier
+from dental_image_organizer.ml.classifier import (
+    MIN_SAMPLES_PER_SLOT,
+    SlotClassifier,
+    load_classifier,
+    train_classifier,
+)
 from dental_image_organizer.ml.embedder import Embedder, EmbeddingPair
 from dental_image_organizer.ml.model_store import DEFAULT_MODEL, cached_model, download_model
 from dental_image_organizer.ml.samples import SampleStore
 from dental_image_organizer.services.batch_io import (
     MTIME_WARNING,
     capture_time,
+    header_capture_time,
     load_photo,
     load_photo_with_id,
     os_error_message,
@@ -52,7 +62,6 @@ from dental_image_organizer.services.composite import (
     DEFAULT_BASELINE,
     DEFAULT_CELL_SIZE,
     CellPlan,
-    assign_photos,
     compose,
     plan_composite,
     render_cell,
@@ -65,17 +74,19 @@ WORKING_LONG_EDGE = 1600
 CLASSIFIER_FILE = "model.json"
 
 ORDER_NOTE = (
-    "Slots were assigned by shooting order: the AI classifier needs 3 confirmed samples per "
-    "slot. Check the result, fix it with --assign, and rerun with --learn to teach it."
+    "Slots were assigned by shooting order: the AI classifier needs "
+    f"{MIN_SAMPLES_PER_SLOT} confirmed samples per slot."
 )
+ORDER_HINT = "Check the result, fix it with --assign, and rerun with --learn to teach it."
 NO_MODEL_NOTE = (
     "The AI classifier is trained, but the AI model is not downloaded; slots were assigned by "
     "shooting order. Rerun with --download-model."
 )
-DOWNLOAD_FAILED_NOTE = "Slots were assigned by shooting order."
+ORDER_FALLBACK_NOTE = "Slots were assigned by shooting order."
 STALE_MODEL_NOTE = (
     "The AI model changed since the classifier was trained, so its samples no longer apply; "
-    "confirm 3 sets again with --learn. Slots were assigned by shooting order."
+    f"confirm {MIN_SAMPLES_PER_SLOT} sets again with --learn. Slots were assigned by shooting "
+    "order."
 )
 DAMAGED_CLASSIFIER_NOTE = (
     "The AI classifier file is damaged and was ignored; slots were assigned by shooting order. "
@@ -83,6 +94,9 @@ DAMAGED_CLASSIFIER_NOTE = (
 )
 LEARN_NEEDS_MODEL = (
     "--learn needs the AI model (downloaded once from github.com); rerun with --download-model."
+)
+DUPLICATE_PHOTO_NOTE = (
+    "The same photo file was placed in more than one slot, so those cells were not learned."
 )
 NO_PHOTOS = "No usable photos to compose."
 
@@ -93,12 +107,15 @@ def _ignore(_message: str) -> None:
 
 @dataclass(frozen=True)
 class CompositeOptions:
-    """`assign` maps a photo, by file name or path (see `find_photo`), to a slot or None (tray)."""
+    """`assign` maps a photo, by its index in the input, to a slot or None (tray).
+
+    `resolve_assign` turns file names or paths into these indices.
+    """
 
     order: Sequence[Slot] = SLOTS
     flips: Mapping[Slot, Flip] = field(default_factory=lambda: dict(DEFAULT_FLIPS))
     baseline: Slot = DEFAULT_BASELINE
-    assign: Mapping[str, Slot | None] = field(default_factory=dict)
+    assign: Mapping[int, Slot | None] = field(default_factory=dict)
     learn: bool = False
     download_model: bool = False
 
@@ -118,6 +135,8 @@ class CompositeReport:
     """`output` is None when no cell could be rendered, so nothing was written.
 
     `baseline` is the slot the colors were matched to; None when no cell was planned.
+    `learn_error` says why storing the samples of a --learn run failed after the composite was
+    written.
     """
 
     output: Path | None
@@ -130,10 +149,11 @@ class CompositeReport:
     notes: tuple[str, ...]
     learned: int
     trained: bool
+    learn_error: str | None = None
 
     @property
     def failed(self) -> bool:
-        return any(p.status == "failed" for p in self.problems)
+        return self.learn_error is not None or any(p.status == "failed" for p in self.problems)
 
 
 @dataclass(frozen=True)
@@ -147,15 +167,25 @@ class _AiState:
 class _Working:
     """A decoded photo kept as a small working copy.
 
-    `number` is its 1-based input position; `photo_id` is the SHA-256 of its file.
+    `number` is its 1-based input position; `photo_id` is the SHA-256 of its file, hashed only
+    for a --learn run.
     """
 
     number: int
     source: Path
-    photo_id: str
+    photo_id: str | None
     image: RGBImage
     taken: datetime
     from_file: bool
+
+
+@dataclass(frozen=True)
+class _Hole:
+    """An input that failed to decode; `taken` is the capture time left in its header."""
+
+    number: int
+    source: Path
+    taken: datetime | None
 
 
 def run_composite(
@@ -171,7 +201,9 @@ def run_composite(
     # Validate before any work so a bad name or option cannot leave a half-written export.
     sanitize_component(patient)
     sanitize_component(tag)
-    assign = _resolve_assign(options.assign, photo_paths)
+    if sorted(options.order) != sorted(SLOTS):
+        raise ValueError("order must list every slot exactly once")
+    check_overrides(options.assign, len(photo_paths))
     # The AI state comes before decoding so a --learn without the model fails before writing.
     ai = _resolve_ai(options, notify)
 
@@ -181,7 +213,7 @@ def run_composite(
         # Events are tagged with a position, never a file name: patient folders and exports
         # carry patient names (spec §4.13).
         with structlog.contextvars.bound_contextvars(photo=number):
-            loaded = _load_working(number, path)
+            loaded = _load_working(number, path, with_id=options.learn)
         if isinstance(loaded, PhotoOutcome):
             problems[number] = loaded
         else:
@@ -190,26 +222,27 @@ def run_composite(
         raise DioError(NO_PHOTOS)
 
     images = [w.image for w in workings]
-    embeddings = ai.embedder.embed(images) if ai.embedder is not None else None
-    unreadable = [number for number, p in problems.items() if p.status == "failed"]
+    embeddings, embed_notes = _embed(ai.embedder, images, learn=options.learn)
     if ai.classifier is not None and embeddings is not None:
         # An unreadable photo has no embedding, so the classifier simply never places it.
-        assignment = assign_photos(
-            [w.taken for w in workings],
-            options.order,
-            classifier=ai.classifier,
-            embeddings=embeddings,
-        )
+        assignment = assign_by_classifier(ai.classifier.slot_probabilities(embeddings))
     else:
-        assignment = _order_keeping_holes(workings, unreadable, options.order)
+        holes = [
+            _Hole(number, p.source, header_capture_time(p.source))
+            for number, p in problems.items()
+            if p.status == "failed"
+        ]
+        assignment = _order_keeping_holes(workings, holes, options.order)
     # An --assign entry for a photo that failed to decode is ignored: it is reported already.
     index = {w.number - 1: i for i, w in enumerate(workings)}
     assignment = with_overrides(
-        assignment, {index[photo]: slot for photo, slot in assign.items() if photo in index}
+        assignment,
+        {index[photo]: slot for photo, slot in options.assign.items() if photo in index},
     )
-    notes = list(ai.notes)
-    if assignment.method == "order" and not ai.notes:
-        notes.append(ORDER_NOTE)
+    notes = [*ai.notes, *embed_notes]
+    if assignment.method == "order" and not notes:
+        # A --learn run is the one that teaches it.
+        notes.append(ORDER_NOTE if options.learn else f"{ORDER_NOTE} {ORDER_HINT}")
     if any(w.from_file for w in workings):
         notes.append(MTIME_WARNING)
 
@@ -247,18 +280,30 @@ def run_composite(
         name = composite_filename(patient, tag, composite_capture_date(dates))
         output = write_unique(out_dir, taken, name, encode_jpeg(compose(rendered)))
 
-    learned, trained = 0, False
+    learned, trained, learn_error = 0, False, None
     if options.learn and rendered:
-        # _resolve_ai always creates an embedder for --learn, or raises.
+        # _resolve_ai and _embed give --learn an embedder and embeddings, or raise.
         assert ai.embedder is not None and embeddings is not None
-        placed = [plan.cells[slot].photo for slot in rendered]
-        trained = _learn(
-            embeddings.take(placed),
-            list(rendered),
-            [workings[i].photo_id for i in placed],
-            ai.embedder.model_hash,
-        )
-        learned = len(placed)
+        placed = [(slot, plan.cells[slot].photo) for slot in rendered]
+        counts = Counter(_photo_id(workings[photo]) for _, photo in placed)
+        # Identical files in two slots would give one photo id two contradicting labels, and
+        # neither can be told right.
+        kept = [(slot, photo) for slot, photo in placed if counts[_photo_id(workings[photo])] == 1]
+        if len(kept) < len(placed):
+            notes.append(DUPLICATE_PHOTO_NOTE)
+        try:
+            trained = _learn(
+                embeddings.take([photo for _, photo in kept]),
+                [slot for slot, _ in kept],
+                [_photo_id(workings[photo]) for _, photo in kept],
+                ai.embedder.model_hash,
+            )
+        except Exception as exc:
+            # The composite is written already; a failed sample write must not hide it.
+            log.exception("learning_failed")
+            learn_error = _failure_message(exc)
+        else:
+            learned = len(kept)
 
     return CompositeReport(
         output=output,
@@ -271,6 +316,7 @@ def run_composite(
         notes=tuple(notes),
         learned=learned,
         trained=trained,
+        learn_error=learn_error,
     )
 
 
@@ -308,101 +354,151 @@ def _same_file(name: str, path: Path) -> bool:
         return False
 
 
-def _resolve_assign(
-    assign: Mapping[str, Slot | None], photo_paths: Sequence[Path]
+def resolve_assign(
+    entries: Iterable[tuple[str, Slot | None]], photo_paths: Sequence[Path]
 ) -> dict[int, Slot | None]:
-    """`assign` keyed by input index; raises ValueError for a bad or contradictory entry."""
+    """`CompositeOptions.assign` from (file name or path, slot or None) entries.
+
+    Raises ValueError for a name that matches no input, a photo named twice, or two photos
+    in one slot.
+    """
     resolved: dict[int, Slot | None] = {}
-    for name, slot in assign.items():
+    for name, slot in entries:
         photo = find_photo(name, photo_paths)
         if photo in resolved:
-            raise ValueError(f"--assign names {name!r} twice")
+            raise ValueError(f"{name!r} is assigned twice")
+        if slot is not None and slot in resolved.values():
+            raise ValueError(f"two files are assigned to {slot}")
         resolved[photo] = slot
-    targets = [slot for slot in resolved.values() if slot is not None]
-    if len(targets) != len(set(targets)):
-        raise ValueError("--assign puts two files in the same slot")
     return resolved
 
 
 def _order_keeping_holes(
-    workings: Sequence[_Working], unreadable: Sequence[int], order: Sequence[Slot]
+    workings: Sequence[_Working], holes: Sequence[_Hole], order: Sequence[Slot]
 ) -> Assignment:
     """Shooting order in which each unreadable photo still holds its rank, leaving it empty.
 
-    Without the hole, every later photo would move up one slot. An unreadable photo has no
-    capture time, so it borrows that of the nearest decoded input before it (after it, if none
-    is before); ties keep input order, so it ranks next to the photo it borrowed from.
+    Without the hole, every later photo would move up one slot. Photos may be passed in any
+    order, so a hole ranks by the capture time left in its header; without one, it ranks right
+    after the photo whose file name precedes it, because cameras number files in shooting
+    order. Equal capture times rank by file name for the same reason. A hole without a capture
+    time still ranks wrong when the camera's file numbers wrap past 9999 next to it.
     """
-    taken = {w.number: w.taken for w in workings}
-    decoded = sorted(taken)
-
-    def stand_in(number: int) -> datetime:
-        before = [n for n in decoded if n < number]
-        return taken[before[-1] if before else decoded[0]]
-
-    numbers = sorted([*decoded, *unreadable])
-    times = [taken[n] if n in taken else stand_in(n) for n in numbers]
-    by_number = dict(zip(numbers, assign_by_order(times, order).slots, strict=True))
-    slots = tuple(by_number[w.number] for w in workings)
+    # Listed by file name, so shooting_rank breaks a tie of capture times by file name.
+    timed = sorted(
+        [(w.taken, w.number, w.source) for w in workings]
+        + [(h.taken, h.number, h.source) for h in holes if h.taken is not None],
+        key=lambda entry: (_name_key(entry[2]), entry[1]),
+    )
+    ranked = [(timed[i][1], timed[i][2]) for i in shooting_rank([e[0] for e in timed])]
+    untimed = sorted(
+        (h for h in holes if h.taken is None), key=lambda h: (_name_key(h.source), h.number)
+    )
+    for hole in untimed:
+        ranked.insert(_name_position(ranked, hole.number, hole.source), (hole.number, hole.source))
+    by_number = {number: slot for (number, _), slot in zip(ranked, order, strict=False)}
+    slots = tuple(by_number.get(w.number) for w in workings)
     return Assignment(slots, (None,) * len(slots), "order")
 
 
-def _resolve_ai(options: CompositeOptions, notify: Callable[[str], None]) -> _AiState:
-    # Read at call time, not import time, so a test can swap in the fake model.
-    spec = DEFAULT_MODEL
-    classifier_file = paths.classifier_dir() / CLASSIFIER_FILE
-    need_model = options.learn or classifier_file.exists()
-    model_path = cached_model(spec, paths.model_cache_dir()) if need_model else None
-    notes: list[str] = []
-    download_failed = False
-    if need_model and model_path is None and options.download_model:
-        notify(f"Downloading the AI model ({spec.size_bytes // 1_000_000} MB) from github.com ...")
-        try:
-            model_path = download_model(spec, paths.model_cache_dir())
-        except (ModelUnavailableError, ModelIntegrityError) as exc:
-            if options.learn:
-                raise
-            # Offline or a bad download must not block the composite (spec §4.6).
-            notes.append(f"{exc} {DOWNLOAD_FAILED_NOTE}")
-            download_failed = True
-    if options.learn and model_path is None:
-        raise ModelUnavailableError(LEARN_NEEDS_MODEL)
+def _name_position(ranked: Sequence[tuple[int, Path]], number: int, source: Path) -> int:
+    """The rank right after the photo whose file name precedes `source`'s."""
+    # Input order settles equal names, such as a retake saved in another folder.
+    key = (_name_key(source), number)
+    keys = [(_name_key(path), n) for n, path in ranked]
+    earlier = [i for i, other in enumerate(keys) if other < key]
+    if earlier:
+        return max(earlier, key=lambda i: keys[i]) + 1
+    # No file name precedes it, so it was shot before the photo whose name comes first.
+    return min(range(len(keys)), key=lambda i: keys[i])
 
-    classifier: SlotClassifier | None = None
-    if model_path is None:
-        # After a failed download, "rerun with --download-model" would be the wrong advice.
-        if classifier_file.exists() and not download_failed:
-            notes.append(NO_MODEL_NOTE)
-    else:
-        try:
-            classifier = load_classifier(classifier_file, spec.sha256)
-        except StorageError:
-            # The classifier is rebuilt from the samples, so a damaged file only costs the AI
-            # placement of this run, never the composite.
-            notes.append(DAMAGED_CLASSIFIER_NOTE)
-        else:
-            if classifier is None and classifier_file.exists():
-                notes.append(STALE_MODEL_NOTE)
+
+def _name_key(path: Path) -> tuple[str | int, ...]:
+    # Numbers compare as numbers, so IMG_99 sorts before IMG_100; macOS may hand over
+    # decomposed (NFD) names.
+    name = unicodedata.normalize("NFC", path.name).casefold()
+    parts = re.split(r"(\d+)", name)
+    return tuple(int(part) if i % 2 else part for i, part in enumerate(parts))
+
+
+def _resolve_ai(options: CompositeOptions, notify: Callable[[str], None]) -> _AiState:
+    classifier_file = paths.classifier_dir() / CLASSIFIER_FILE
+    if not (options.learn or classifier_file.exists()):
+        return _AiState(None, None, ())
     if options.learn:
         # Read now, not after the composite is written: a damaged store must stop the run
         # before any output exists. Learning reads it again; it is small.
         SampleStore(paths.classifier_dir()).load()
-    embedder = (
-        Embedder(model_path, spec.sha256)
-        if model_path is not None and (classifier is not None or options.learn)
-        else None
-    )
-    return _AiState(classifier, embedder, tuple(notes))
+    try:
+        return _load_ai(classifier_file, options, notify)
+    except (ModelUnavailableError, ModelIntegrityError) as exc:
+        if options.learn:
+            raise
+        # A model that cannot be fetched, read, or loaded must not block the composite
+        # (spec §4.6).
+        return _AiState(None, None, (f"{exc} {ORDER_FALLBACK_NOTE}",))
 
 
-def _load_working(number: int, path: Path) -> _Working | PhotoOutcome:
+def _load_ai(
+    classifier_file: Path, options: CompositeOptions, notify: Callable[[str], None]
+) -> _AiState:
+    # Read at call time, not import time, so a test can swap in the fake model.
+    spec = DEFAULT_MODEL
+    model_path = cached_model(spec, paths.model_cache_dir())
+    if model_path is None and options.download_model:
+        notify(f"Downloading the AI model ({spec.size_bytes // 1_000_000} MB) from github.com ...")
+        model_path = download_model(spec, paths.model_cache_dir())
+    if model_path is None:
+        if options.learn:
+            raise ModelUnavailableError(LEARN_NEEDS_MODEL)
+        return _AiState(None, None, (NO_MODEL_NOTE,))
+
+    notes: list[str] = []
+    classifier: SlotClassifier | None = None
+    try:
+        classifier = load_classifier(classifier_file, spec.sha256)
+    except StorageError:
+        # The classifier is rebuilt from the samples, so a damaged file only costs the AI
+        # placement of this run, never the composite.
+        notes.append(DAMAGED_CLASSIFIER_NOTE)
+    else:
+        if classifier is None and classifier_file.exists():
+            notes.append(STALE_MODEL_NOTE)
+    if classifier is None and not options.learn:
+        return _AiState(None, None, tuple(notes))
+    return _AiState(classifier, Embedder(model_path, spec.sha256), tuple(notes))
+
+
+def _embed(
+    embedder: Embedder | None, images: Sequence[RGBImage], *, learn: bool
+) -> tuple[EmbeddingPair | None, tuple[str, ...]]:
+    """Embeddings and the notes of a failure; a failure only raises when learning needs them."""
+    if embedder is None:
+        return None, ()
+    try:
+        return embedder.embed(images), ()
+    except Exception as exc:
+        # onnxruntime raises its own exception types, OpenCV its cv2.error, and a large batch
+        # a MemoryError; none of them may cost the composite (spec §4.6).
+        log.exception("embedding_failed")
+        message = f"Running the AI model failed: {_failure_message(exc)}"
+        if learn:
+            raise ModelUnavailableError(message) from exc
+        return None, (f"{message} {ORDER_FALLBACK_NOTE}",)
+
+
+def _load_working(number: int, path: Path, *, with_id: bool) -> _Working | PhotoOutcome:
     """Decode one photo into a working copy; a failure is recorded, never raised (spec §4.13).
 
     Only the working copy outlives this call, so one full-size photo is in memory at a time.
     """
+    photo_id: str | None = None
     try:
-        # The id is hashed from the bytes read for this decode, so no file is read twice here.
-        photo, photo_id = load_photo_with_id(path)
+        if with_id:
+            # The id is hashed from the bytes read for this decode, so no file is read twice.
+            photo, photo_id = load_photo_with_id(path)
+        else:
+            photo = load_photo(path)
         taken, from_file = capture_time(photo, path)
         image, _ = resize_long_edge(photo.rgb, WORKING_LONG_EDGE)
     except UnsupportedFormatError as exc:
@@ -440,8 +536,16 @@ def _render_full(path: Path, cell: CellPlan) -> RGBImage | PhotoOutcome:
 
 
 def _failure_message(exc: Exception) -> str:
-    # plan_composite has logged the trace already; this only words the reported message.
+    # The caller has logged the trace already; this only words the reported message.
+    if isinstance(exc, DioError):
+        return str(exc)
     return os_error_message(exc) if isinstance(exc, OSError) else unexpected_message(exc)
+
+
+def _photo_id(working: _Working) -> str:
+    # _load_working hashes every photo of a --learn run, the only run that reads the ids.
+    assert working.photo_id is not None
+    return working.photo_id
 
 
 def _cell_outcome(cell: CellPlan, source: Path) -> CellOutcome:

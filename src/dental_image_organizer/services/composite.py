@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 
 import cv2
 import structlog
@@ -15,15 +14,8 @@ from dental_image_organizer.core.imageio import RGBImage
 from dental_image_organizer.core.layout import render_composite
 from dental_image_organizer.core.masks import BoolMask, gingiva_mask, tooth_mask
 from dental_image_organizer.core.render import render
-from dental_image_organizer.core.slots import SLOTS, Flip, Slot
-from dental_image_organizer.ml.assignment import (
-    Assignment,
-    AssignMethod,
-    assign_by_classifier,
-    assign_by_order,
-)
-from dental_image_organizer.ml.classifier import SlotClassifier
-from dental_image_organizer.ml.embedder import EmbeddingPair
+from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS, Flip, Slot
+from dental_image_organizer.ml.assignment import Assignment, AssignMethod
 
 log = structlog.get_logger(__name__)
 
@@ -57,20 +49,6 @@ class CompositePlan:
     failed: dict[int, Exception]
 
 
-def assign_photos(
-    capture_times: Sequence[datetime],
-    order: Sequence[Slot],
-    *,
-    classifier: SlotClassifier | None = None,
-    embeddings: EmbeddingPair | None = None,
-) -> Assignment:
-    # A classifier without embeddings (model not available) cannot score anything, so the
-    # shooting order is the only honest fallback.
-    if classifier is not None and embeddings is not None:
-        return assign_by_classifier(classifier.slot_probabilities(embeddings))
-    return assign_by_order(capture_times, order)
-
-
 def plan_composite(
     images: Sequence[RGBImage],
     assignment: Assignment,
@@ -83,6 +61,7 @@ def plan_composite(
     """`positions` label each image's log events, 1-based; by default its index + 1.
 
     A batch passes the input positions, which count skipped and unreadable files too.
+    `flips` overrides DEFAULT_FLIPS per slot; a slot it leaves out keeps its default.
     """
     if len(images) != len(assignment.slots):
         raise ValueError(f"got {len(images)} images for {len(assignment.slots)} assigned photos")
@@ -95,7 +74,7 @@ def plan_composite(
     for slot in SLOTS:
         if slot not in slot_map:
             continue
-        photo, flip = slot_map[slot], flips[slot]
+        photo, flip = slot_map[slot], flips.get(slot, DEFAULT_FLIPS[slot])
         # core/ only sees pixels; binding the position tags its events without file names.
         with structlog.contextvars.bound_contextvars(photo=labels[photo]):
             try:

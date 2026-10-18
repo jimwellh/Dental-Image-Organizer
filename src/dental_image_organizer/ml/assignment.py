@@ -55,28 +55,35 @@ def assign_by_classifier(probabilities: npt.NDArray[np.float64]) -> Assignment:
     return Assignment(tuple(slots), tuple(confidences), "classifier")
 
 
+def shooting_rank(capture_times: Sequence[datetime]) -> list[int]:
+    """Photo indices in shooting order; equal times keep index order."""
+    # EXIF times are local wall-clock; mixing aware and naive values would make them incomparable.
+    return sorted(
+        range(len(capture_times)), key=lambda i: (capture_times[i].replace(tzinfo=None), i)
+    )
+
+
 def assign_by_order(capture_times: Sequence[datetime], order: Sequence[Slot]) -> Assignment:
     if sorted(order) != sorted(SLOTS):
         raise ValueError("order must list every slot exactly once")
-    # EXIF times are local wall-clock; mixing aware and naive values would make them incomparable.
-    ranked = sorted(
-        range(len(capture_times)), key=lambda i: (capture_times[i].replace(tzinfo=None), i)
-    )
     slots: list[Slot | None] = [None] * len(capture_times)
-    for slot, photo in zip(order, ranked, strict=False):
+    for slot, photo in zip(order, shooting_rank(capture_times), strict=False):
         slots[photo] = slot
     return Assignment(tuple(slots), (None,) * len(slots), "order")
 
 
-def with_overrides(assignment: Assignment, overrides: Mapping[int, Slot | None]) -> Assignment:
+def check_overrides(overrides: Mapping[int, Slot | None], count: int) -> None:
+    """Raises ValueError for two photos in one slot or a photo index outside `count` photos."""
     targets = [slot for slot in overrides.values() if slot is not None]
     if len(targets) != len(set(targets)):
         raise ValueError("two photos cannot be assigned to the same slot")
-    count = len(assignment.slots)
     for photo in overrides:
         if not 0 <= photo < count:
             raise ValueError(f"photo index {photo} is out of range")
 
+
+def with_overrides(assignment: Assignment, overrides: Mapping[int, Slot | None]) -> Assignment:
+    check_overrides(overrides, len(assignment.slots))
     slots = list(assignment.slots)
     confidences = list(assignment.confidences)
     for photo, target in overrides.items():

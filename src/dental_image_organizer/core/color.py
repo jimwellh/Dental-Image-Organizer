@@ -173,8 +173,12 @@ def fit_reinhard(
     source_rgb: RGBImage, source_mask: BoolMask, target_rgb: RGBImage, target_mask: BoolMask
 ) -> LabAffine:
     """Per-channel mean/spread transfer of the source's colors onto the target's (spec §4.7.3)."""
-    source = _masked_lab(source_rgb, source_mask)
-    target = _masked_lab(target_rgb, target_mask)
+    # A near-empty mask gives unstable statistics, so both sides fall back to the whole frame
+    # together: whole-frame statistics against tooth and gingiva ones would shift the cell by
+    # the difference between the regions, not between the photos.
+    masked = min(source_mask.mean(), target_mask.mean()) >= MIN_STATS_SHARE
+    source = _lab_pixels(source_rgb, source_mask if masked else None)
+    target = _lab_pixels(target_rgb, target_mask if masked else None)
     mu_s, mu_t = source.mean(axis=0), target.mean(axis=0)
     sd_s, sd_t = source.std(axis=0), target.std(axis=0)
     gains: list[float] = []
@@ -192,10 +196,9 @@ def fit_reinhard(
     )
 
 
-def _masked_lab(rgb: RGBImage, mask: BoolMask) -> FloatArray:
+def _lab_pixels(rgb: RGBImage, mask: BoolMask | None) -> FloatArray:
     lab = to_lab(rgb)
-    # A near-empty mask gives unstable statistics, so fall back to the whole frame.
-    if mask.mean() < MIN_STATS_SHARE:
+    if mask is None:
         return lab.reshape(-1, 3).astype(np.float64)
     return lab[mask].astype(np.float64)
 

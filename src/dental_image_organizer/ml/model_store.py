@@ -46,14 +46,24 @@ def sha256_file(path: Path) -> str:
 
 
 def cached_model(spec: ModelSpec, cache_dir: Path) -> Path | None:
-    """Return the cached model if it verifies; delete a corrupt file so it is re-fetched."""
+    """Return the cached model if it verifies; delete a corrupt file so it is re-fetched.
+
+    Raises ModelUnavailableError when the cached file cannot be read or removed.
+    """
     path = cache_dir / spec.filename
-    if not path.is_file():
-        return None
-    if path.stat().st_size == spec.size_bytes and sha256_file(path) == spec.sha256:
-        return path
-    _log.warning("model_cache_invalid")
-    path.unlink(missing_ok=True)
+    try:
+        if not path.is_file():
+            return None
+        if path.stat().st_size == spec.size_bytes and sha256_file(path) == spec.sha256:
+            return path
+        _log.warning("model_cache_invalid")
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        # A locked or unreadable cache must fall back like a missing model (spec §4.6);
+        # strerror leaves out the path, which sits in the user's home folder.
+        _log.error("model_cache_unreadable", error=type(exc).__name__)
+        reason = exc.strerror or type(exc).__name__
+        raise ModelUnavailableError(f"Reading the cached AI model failed: {reason}") from exc
     return None
 
 

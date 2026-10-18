@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import zlib
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +113,9 @@ class SampleStore:
                 f"got {len(pairs)} embeddings for {len(slots)} labels and "
                 f"{len(photo_ids)} photo ids"
             )
+        repeated = sorted(photo for photo, count in Counter(photo_ids).items() if count > 1)
+        if repeated:
+            raise ValueError(f"photo ids {repeated} appear more than once; one photo has one label")
         stored = self.load()
         # Re-confirming a corrected set must replace its earlier labels, not contradict them,
         # and must not count the same photos twice toward the trained state.
