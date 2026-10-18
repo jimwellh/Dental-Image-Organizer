@@ -57,6 +57,15 @@ This installs the app with [uv](https://docs.astral.sh/uv/) and adds a
 **Dental Image Organizer** launcher to `~/Applications`. No Python installation is required, and
 the launcher costs nothing.
 
+## Third-party model
+
+The composite classifier uses embeddings from Meta's
+[DINOv2](https://github.com/facebookresearch/dinov2) ViT-S/14 (Apache-2.0), exported to ONNX by
+`scripts/export_dinov2_onnx.py`. The model is downloaded once, with your consent
+(`--download-model`), from this repository's GitHub Releases
+([`model-dinov2s-v1`](https://github.com/jimwellh/Dental-Image-Organizer/releases/tag/model-dinov2s-v1))
+and verified by SHA-256.
+
 ## Documentation
 
 - [Product requirements](doc/requirements.md)
