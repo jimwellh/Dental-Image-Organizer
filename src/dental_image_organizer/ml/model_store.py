@@ -77,6 +77,10 @@ def download_model(
             response.raise_for_status()
             with partial.open("wb") as handle:
                 for chunk in response.iter_bytes(CHUNK_BYTES):
+                    # Check before writing so a hostile server cannot fill the disk.
+                    if done + len(chunk) > spec.size_bytes:
+                        _log.error("model_download_too_large")
+                        raise ModelIntegrityError("Download is larger than the pinned model size")
                     handle.write(chunk)
                     digest.update(chunk)
                     done += len(chunk)

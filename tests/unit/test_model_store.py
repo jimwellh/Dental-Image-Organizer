@@ -86,3 +86,19 @@ def test_sha256_file(tmp_path: Path) -> None:
     assert sha256_file(tmp_path / "f") == (
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     )
+
+
+def test_oversized_download_is_aborted_before_exceeding_the_pinned_size(tmp_path: Path) -> None:
+    spec = _spec(b"x" * 10)
+    seen: list[int] = []
+
+    with pytest.raises(ModelIntegrityError):
+        download_model(
+            spec,
+            tmp_path,
+            client=_client(lambda r: httpx.Response(200, content=b"x" * 5_000_000)),
+            progress=lambda done, total: seen.append(done),
+        )
+
+    assert list(tmp_path.iterdir()) == []
+    assert all(done <= spec.size_bytes for done in seen)
