@@ -16,6 +16,7 @@ from dental_image_organizer.services.headless import PhotoOutcome, ProcedureRepo
 from dental_image_organizer.services.headless_composite import (
     CompositeOptions,
     CompositeReport,
+    find_photo,
     run_composite,
 )
 from dental_image_organizer.services.procedure import OUTPUT_SCALES
@@ -136,7 +137,9 @@ def composite(
     ] = None,
     assign: Annotated[
         list[str] | None,
-        typer.Option(help="FILE=SLOT or FILE=tray: place a photo by hand; repeatable."),
+        typer.Option(
+            help="FILE=SLOT or FILE=tray: place a photo, by file name or path; repeatable."
+        ),
     ] = None,
     learn: Annotated[
         bool, typer.Option("--learn", help="Store this checked run as AI classifier samples.")
@@ -169,8 +172,8 @@ def composite(
     except (DioError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
-    _print_composite(report, learn=learn)
-    if report.failed:
+    _print_composite(report, learn=learn, baseline=options.baseline)
+    if report.failed or report.output is None:
         raise typer.Exit(1)
 
 
@@ -205,8 +208,8 @@ def _parse_flips(items: Iterable[str]) -> dict[Slot, Flip]:
 
 
 def _parse_assign(items: Iterable[str], photos: Sequence[Path]) -> dict[str, Slot | None]:
-    names = {p.name for p in photos}
     assign: dict[str, Slot | None] = {}
+    chosen: set[int] = set()
     for item in items:
         # File names may contain "=", slot names never do.
         name, sep, target = item.rpartition("=")
@@ -214,19 +217,27 @@ def _parse_assign(items: Iterable[str], photos: Sequence[Path]) -> dict[str, Slo
             raise typer.BadParameter(
                 f"expected FILE=SLOT or FILE=tray, got {item!r}", param_hint="--assign"
             )
-        if name not in names:
-            raise typer.BadParameter(f"{name!r} is not one of the photos", param_hint="--assign")
-        if name in assign:
+        try:
+            photo = find_photo(name, photos)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--assign") from exc
+        if photo in chosen:
             raise typer.BadParameter(f"{name!r} is assigned twice", param_hint="--assign")
         slot = None if target.strip() == "tray" else _parse_slot_option(target, "--assign")
         if slot is not None and slot in assign.values():
             raise typer.BadParameter(f"two files are assigned to {slot}", param_hint="--assign")
+        chosen.add(photo)
         assign[name] = slot
     return assign
 
 
-def _print_composite(report: CompositeReport, *, learn: bool) -> None:
-    for cell in report.cells:
+def _print_composite(report: CompositeReport, *, learn: bool, baseline: Slot) -> None:
+    cells = {cell.slot: cell for cell in report.cells}
+    for slot in SLOTS:
+        cell = cells.get(slot)
+        if cell is None:
+            typer.echo(f"{slot:<16} {'':>5}  (empty)")
+            continue
         if cell.confidence is None:
             confidence = f"{'':>5}"
         else:
@@ -239,10 +250,15 @@ def _print_composite(report: CompositeReport, *, learn: bool) -> None:
     for outcome in report.problems:
         if outcome.status == "failed":
             typer.echo(f"{'failed':<16} {'':>5}  {outcome.source.name}: {outcome.message}")
-    typer.echo(f"{'composite':<16} {'':>5}  -> {report.output.name}")
+    if report.output is None:
+        typer.echo(f"{'composite':<16} {'':>5}  not written: no photo could be placed")
+    else:
+        typer.echo(f"{'composite':<16} {'':>5}  -> {report.output.name}")
+        if report.baseline is not None and report.baseline != baseline:
+            typer.echo(f"Colors were matched to {report.baseline} because {baseline} has no photo.")
     for note in report.notes:
         typer.echo(note)
-    if learn:
+    if learn and report.output is not None:
         state = "trained" if report.trained else "not trained yet"
         typer.echo(f"Learned {report.learned} samples; the AI classifier is {state}.")
     _print_skips(report.problems)

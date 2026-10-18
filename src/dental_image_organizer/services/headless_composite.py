@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 import structlog
@@ -86,7 +88,7 @@ def _ignore(_message: str) -> None:
 
 @dataclass(frozen=True)
 class CompositeOptions:
-    """`assign` maps input file names to a slot, or to None for the tray."""
+    """`assign` maps a photo, by file name or path (see `find_photo`), to a slot or None (tray)."""
 
     order: Sequence[Slot] = SLOTS
     flips: Mapping[Slot, Flip] = field(default_factory=lambda: dict(DEFAULT_FLIPS))
@@ -108,7 +110,13 @@ class CellOutcome:
 
 @dataclass(frozen=True)
 class CompositeReport:
-    output: Path
+    """`output` is None when no cell could be rendered, so nothing was written.
+
+    `baseline` is the slot the colors were matched to; None when no cell was planned.
+    """
+
+    output: Path | None
+    baseline: Slot | None
     cells: tuple[CellOutcome, ...]
     tray: tuple[Path, ...]
     problems: tuple[PhotoOutcome, ...]
@@ -152,14 +160,13 @@ def run_composite(
     patient: str,
     tag: str,
     options: CompositeOptions | None = None,
-    today: date | None = None,
     notify: Callable[[str], None] = _ignore,
 ) -> CompositeReport:
     options = options or CompositeOptions()
     # Validate before any work so a bad name or option cannot leave a half-written export.
     sanitize_component(patient)
     sanitize_component(tag)
-    _check_assign(options.assign, photo_paths)
+    assign = _resolve_assign(options.assign, photo_paths)
     # The AI state comes before decoding so a --learn without the model fails before writing.
     ai = _resolve_ai(options, notify)
 
@@ -182,11 +189,10 @@ def run_composite(
     assignment = assign_photos(
         [w.taken for w in workings], options.order, classifier=ai.classifier, embeddings=embeddings
     )
-    # A name of a photo that failed to decode is skipped: that photo is reported already.
-    index = {w.source.name: i for i, w in enumerate(workings)}
+    # A photo that failed to decode is skipped: it is reported already.
+    index = {w.number - 1: i for i, w in enumerate(workings)}
     assignment = with_overrides(
-        assignment,
-        {index[name]: slot for name, slot in options.assign.items() if name in index},
+        assignment, {index[photo]: slot for photo, slot in assign.items() if photo in index}
     )
     notes = list(ai.notes)
     if assignment.method == "order" and not ai.notes:
@@ -213,16 +219,17 @@ def run_composite(
         rendered[slot] = result
         cells.append(_cell_outcome(cell, working.source))
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    taken = {p.name for p in out_dir.iterdir()}
-    dates = [workings[plan.cells[slot].photo].taken.date() for slot in rendered]
-    name = composite_filename(
-        patient, tag, composite_capture_date(dates or [today or date.today()])
-    )
-    output = write_unique(out_dir, taken, name, encode_jpeg(compose(rendered)))
+    # An all-black grid is no composite: with no cell rendered, nothing is written or learned.
+    output: Path | None = None
+    if rendered:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        taken = {p.name for p in out_dir.iterdir()}
+        dates = [workings[plan.cells[slot].photo].taken.date() for slot in rendered]
+        name = composite_filename(patient, tag, composite_capture_date(dates))
+        output = write_unique(out_dir, taken, name, encode_jpeg(compose(rendered)))
 
     learned, trained = 0, False
-    if options.learn:
+    if options.learn and rendered:
         # _resolve_ai always creates an embedder for --learn, or raises.
         assert ai.embedder is not None and embeddings is not None
         placed = [plan.cells[slot].photo for slot in rendered]
@@ -236,6 +243,7 @@ def run_composite(
 
     return CompositeReport(
         output=output,
+        baseline=plan.baseline,
         cells=tuple(cells),
         tray=tuple(workings[i].source for i in plan.tray),
         problems=tuple(problems[n] for n in sorted(problems)),
@@ -247,14 +255,54 @@ def run_composite(
     )
 
 
-def _check_assign(assign: Mapping[str, Slot | None], photo_paths: Sequence[Path]) -> None:
-    names = {p.name for p in photo_paths}
-    unknown = sorted(set(assign) - names)
-    if unknown:
-        raise ValueError(f"--assign names files that are not inputs: {', '.join(unknown)}")
-    targets = [slot for slot in assign.values() if slot is not None]
+def find_photo(name: str, photo_paths: Sequence[Path]) -> int:
+    """The index of the input that `name` means: its file name, or a path to it.
+
+    Raises ValueError when no input matches, or when a file name is shared by several inputs.
+    A path to a file that was passed twice means its first occurrence.
+    """
+    if Path(name).name != name:
+        # A path names one file whatever its spelling, case, or Unicode form on disk.
+        matches = [i for i, path in enumerate(photo_paths) if _same_file(name, path)]
+    else:
+        # macOS may hand over decomposed (NFD) names while typed names are composed (NFC).
+        wanted = unicodedata.normalize("NFC", name)
+        matches = [
+            i
+            for i, path in enumerate(photo_paths)
+            if unicodedata.normalize("NFC", path.name) == wanted
+        ]
+        if len(matches) > 1:
+            raise ValueError(
+                f"{name!r} is the name of {len(matches)} photos; pass its path instead"
+            )
+    if not matches:
+        raise ValueError(f"{name!r} is not one of the photos")
+    return matches[0]
+
+
+def _same_file(name: str, path: Path) -> bool:
+    try:
+        return os.path.samefile(name, path)
+    except OSError:
+        # A path that does not exist names no input.
+        return False
+
+
+def _resolve_assign(
+    assign: Mapping[str, Slot | None], photo_paths: Sequence[Path]
+) -> dict[int, Slot | None]:
+    """`assign` keyed by input index; raises ValueError for a bad or contradictory entry."""
+    resolved: dict[int, Slot | None] = {}
+    for name, slot in assign.items():
+        photo = find_photo(name, photo_paths)
+        if photo in resolved:
+            raise ValueError(f"--assign names {name!r} twice")
+        resolved[photo] = slot
+    targets = [slot for slot in resolved.values() if slot is not None]
     if len(targets) != len(set(targets)):
         raise ValueError("--assign puts two files in the same slot")
+    return resolved
 
 
 def _resolve_ai(options: CompositeOptions, notify: Callable[[str], None]) -> _AiState:

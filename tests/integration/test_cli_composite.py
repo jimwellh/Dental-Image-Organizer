@@ -1,6 +1,7 @@
 import hashlib
 import io
 import shutil
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from dental_image_organizer.ml.samples import SampleStore
 from dental_image_organizer.services import composite, headless_composite
 from dental_image_organizer.services.headless_composite import (
     DAMAGED_CLASSIFIER_NOTE,
+    find_photo,
     run_composite,
 )
 from support.fake_model import build_fake_model
@@ -65,12 +67,15 @@ def app_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _invoke(set_dir: Path, out: Path, *extra: str) -> Result:
-    photos = sorted(str(p) for p in set_dir.iterdir())
+    return _invoke_photos(sorted(set_dir.iterdir()), out, *extra)
+
+
+def _invoke_photos(photos: list[Path], out: Path, *extra: str) -> Result:
     return CliRunner().invoke(
         app,
         [
             "composite",
-            *photos,
+            *(str(p) for p in photos),
             "--out",
             str(out),
             "--patient",
@@ -106,6 +111,40 @@ def test_composite_by_shooting_order(set_dir: Path, tmp_path: Path) -> None:
     assert "Slots were assigned by shooting order" in result.output
     assert "Skipped 1 file: 1 video" in result.output
     assert "IMG_0001.jpg" in _lines(result)["upper_right"]
+    assert "(empty)" not in result.output and "Colors were matched" not in result.output
+
+
+def test_empty_slots_and_a_baseline_fallback_are_reported(set_dir: Path, tmp_path: Path) -> None:
+    result = _invoke(
+        set_dir, tmp_path / "out", "--assign", "IMG_0009.jpg=tray", "--baseline", "lower_left"
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    # Empty slots keep their place in the grid order of the cell lines.
+    assert [line.split()[0] for line in lines[:9]] == list(SLOTS)
+    assert lines[8] == f"{'lower_left':<16} {'':>5}  (empty)"
+    assert "IMG_0009.jpg" in _lines(result)["tray"]
+    assert "Colors were matched to upper_right because lower_left has no photo." in lines
+
+
+def test_nothing_is_written_when_no_photo_could_be_placed(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    out = tmp_path / "out"
+
+    result = _invoke_photos(
+        [set_dir / "IMG_0001.jpg"], out, "--assign", "IMG_0001.jpg=tray", "--learn"
+    )
+
+    assert result.exit_code == 1, result.output
+    assert f"{'composite':<16} {'':>5}  not written: no photo could be placed" in (
+        result.output.splitlines()
+    )
+    assert not out.exists()
+    assert "Learned" not in result.output
+    assert not (tmp_path / "data" / "classifier" / "samples.npz").exists()
 
 
 def test_assign_swaps_two_photos(set_dir: Path, tmp_path: Path) -> None:
@@ -115,6 +154,49 @@ def test_assign_swaps_two_photos(set_dir: Path, tmp_path: Path) -> None:
     lines = _lines(result)
     assert "IMG_0001.jpg" in lines["upper_left"]
     assert "IMG_0003.jpg" in lines["upper_right"]
+
+
+def test_assign_accepts_a_path_to_the_photo(set_dir: Path, tmp_path: Path) -> None:
+    result = _invoke(
+        set_dir, tmp_path / "out", "--assign", f"{set_dir / 'IMG_0001.jpg'}=upper_left"
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = _lines(result)
+    assert "IMG_0001.jpg" in lines["upper_left"]
+    assert "IMG_0003.jpg" in lines["upper_right"]
+
+
+def test_a_file_name_shared_by_two_photos_asks_for_the_path(set_dir: Path, tmp_path: Path) -> None:
+    retake = tmp_path / "retakes" / "IMG_0001.jpg"
+    retake.parent.mkdir()
+    retake.write_bytes((set_dir / "IMG_0001.jpg").read_bytes())
+    photos = [*sorted(set_dir.glob("*.jpg")), retake]
+
+    result = _invoke_photos(photos, tmp_path / "out", "--assign", "IMG_0001.jpg=upper_left")
+
+    assert result.exit_code == 2, result.output
+    # The usage error is boxed and wrapped; compare its words.
+    words = " ".join(result.output.replace("│", " ").split())
+    assert "'IMG_0001.jpg' is the name of 2 photos; pass its path instead" in words
+    assert not (tmp_path / "out").exists()
+
+
+def test_assign_names_match_by_file_name_or_path(tmp_path: Path) -> None:
+    # macOS can hand over decomposed names while the typed name is composed, or the reverse.
+    decomposed = tmp_path / unicodedata.normalize("NFD", "café.jpg")
+    plain = tmp_path / "IMG_0001.jpg"
+    for photo in (plain, decomposed):
+        photo.write_bytes(b"photo")
+    photos = [plain, decomposed]
+
+    assert find_photo("IMG_0001.jpg", photos) == 0
+    assert find_photo(str(plain), photos) == 0
+    assert find_photo(unicodedata.normalize("NFC", "café.jpg"), photos) == 1
+    with pytest.raises(ValueError, match="is not one of the photos"):
+        find_photo("IMG_0002.jpg", photos)
+    with pytest.raises(ValueError, match="is not one of the photos"):
+        find_photo(str(tmp_path / "IMG_0002.jpg"), photos)
 
 
 def test_custom_order_changes_the_placement(set_dir: Path, tmp_path: Path) -> None:
@@ -270,7 +352,7 @@ def test_photo_that_fails_planning_leaves_its_slot_empty(
     assert result.exit_code == 1, result.output
     assert isinstance(result.exception, SystemExit), result.exception
     lines = _lines(result)
-    assert "upper_left" not in lines
+    assert lines["upper_left"].endswith("(empty)")
     assert "IMG_0003.jpg: Unexpected ValueError: synthetic leveling failure" in lines["failed"]
     assert (tmp_path / "out" / OUTPUT).exists()
 
