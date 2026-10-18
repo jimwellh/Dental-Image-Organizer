@@ -24,6 +24,7 @@ from dental_image_organizer.errors import (
     DioError,
     ModelIntegrityError,
     ModelUnavailableError,
+    StorageError,
     UnsupportedFormatError,
 )
 from dental_image_organizer.ml.assignment import AssignMethod, with_overrides
@@ -67,6 +68,10 @@ DOWNLOAD_FAILED_NOTE = "Slots were assigned by shooting order."
 STALE_MODEL_NOTE = (
     "The AI model changed since the classifier was trained, so its samples no longer apply; "
     "confirm 3 sets again with --learn. Slots were assigned by shooting order."
+)
+DAMAGED_CLASSIFIER_NOTE = (
+    "The AI classifier file is damaged and was ignored; slots were assigned by shooting order. "
+    "Rerun with --learn to rebuild it."
 )
 LEARN_NEEDS_MODEL = (
     "--learn needs the AI model (downloaded once from github.com); rerun with --download-model."
@@ -269,9 +274,19 @@ def _resolve_ai(options: CompositeOptions, notify: Callable[[str], None]) -> _Ai
         if classifier_file.exists() and not download_failed:
             notes.append(NO_MODEL_NOTE)
     else:
-        classifier = load_classifier(classifier_file, spec.sha256)
-        if classifier is None and classifier_file.exists():
-            notes.append(STALE_MODEL_NOTE)
+        try:
+            classifier = load_classifier(classifier_file, spec.sha256)
+        except StorageError:
+            # The classifier is rebuilt from the samples, so a damaged file only costs the AI
+            # placement of this run, never the composite.
+            notes.append(DAMAGED_CLASSIFIER_NOTE)
+        else:
+            if classifier is None and classifier_file.exists():
+                notes.append(STALE_MODEL_NOTE)
+    if options.learn:
+        # Read now, not after the composite is written: a damaged store must stop the run
+        # before any output exists. Learning reads it again; it is small.
+        SampleStore(paths.classifier_dir()).load()
     embedder = (
         Embedder(model_path, spec.sha256)
         if model_path is not None and (classifier is not None or options.learn)
@@ -350,6 +365,9 @@ def _learn(pairs: EmbeddingPair, slots: Sequence[Slot], model_hash: str) -> bool
     current = samples.for_model(model_hash)
     classifier = train_classifier(current.pairs, current.slots, model_hash)
     if classifier is None:
+        # A file left from before (damaged, another model's, or trained on labels since
+        # replaced) no longer matches the samples; the next run must agree with "not trained".
+        (directory / CLASSIFIER_FILE).unlink(missing_ok=True)
         return False
     classifier.save(directory / CLASSIFIER_FILE)
     return True

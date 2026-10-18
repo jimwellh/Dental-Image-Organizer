@@ -14,8 +14,16 @@ import numpy.typing as npt
 import structlog
 from sklearn.linear_model import LogisticRegression
 
-from dental_image_organizer.core.slots import SLOTS, Slot, SlotGroup, slot_group, slot_side
-from dental_image_organizer.ml.embedder import EmbeddingPair
+from dental_image_organizer.core.slots import (
+    GROUPS,
+    SLOTS,
+    Slot,
+    SlotGroup,
+    slot_group,
+    slot_side,
+)
+from dental_image_organizer.errors import StorageError
+from dental_image_organizer.ml.embedder import EMBEDDING_DIM, EmbeddingPair
 
 MIN_SAMPLES_PER_SLOT = 3
 CLASSIFIER_C = 10.0  # spec amendment 1
@@ -73,24 +81,52 @@ class SlotClassifier:
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload))
+            # Without the fsync, a power loss soon after the rename can leave an empty file.
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
 
 
 def load_classifier(path: Path, model_hash: str) -> SlotClassifier | None:
+    """The saved classifier, or None if there is none or it belongs to another model.
+
+    Raises StorageError when the file cannot be read back.
+    """
     if not path.exists():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
-    # A file without a hash cannot be vouched for, so it counts as another model's.
-    if data.get("model_hash") != model_hash:
-        return None
-    return SlotClassifier(
-        model_hash,
-        tuple(data["group_classes"]),
-        np.asarray(data["group_coef"], np.float64),
-        np.asarray(data["group_intercept"], np.float64),
-        np.asarray(data["side_coef"], np.float64),
-    )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise TypeError(f"expected a JSON object, got {type(data).__name__}")
+        # A file without a hash cannot be vouched for, so it counts as another model's.
+        if data.get("model_hash") != model_hash:
+            return None
+        classifier = SlotClassifier(
+            model_hash,
+            cast("tuple[SlotGroup, ...]", tuple(data["group_classes"])),
+            np.asarray(data["group_coef"], np.float64),
+            np.asarray(data["group_intercept"], np.float64),
+            np.asarray(data["side_coef"], np.float64),
+        )
+        _check_shapes(classifier)
+    except (OSError, KeyError, TypeError, ValueError) as exc:  # JSONDecodeError is a ValueError
+        _log.warning("classifier_damaged", error=type(exc).__name__)
+        raise StorageError("The AI classifier file is damaged") from exc
+    return classifier
+
+
+def _check_shapes(classifier: SlotClassifier) -> None:
+    # A file that parses but does not fit would otherwise fail later, while scoring photos.
+    groups = len(GROUPS)
+    if (
+        sorted(classifier.group_classes) != sorted(GROUPS)
+        or classifier.group_coef.shape != (groups, EMBEDDING_DIM)
+        or classifier.group_intercept.shape != (groups,)
+        or classifier.side_coef.shape != (EMBEDDING_DIM,)
+    ):
+        raise ValueError("the classifier arrays do not fit the embedding model")
 
 
 def train_classifier(

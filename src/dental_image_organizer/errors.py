@@ -31,6 +31,12 @@ class OutputTooLargeError(DioError):
     code = "output_too_large"
 
 
+class StorageError(DioError):
+    """Saved app state cannot be read back; the message says how to recover."""
+
+    code = "storage_error"
+
+
 class ModelUnavailableError(DioError):
     code = "model_unavailable"
 

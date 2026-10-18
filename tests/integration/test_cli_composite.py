@@ -18,7 +18,10 @@ from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS
 from dental_image_organizer.errors import ModelUnavailableError
 from dental_image_organizer.ml.model_store import ModelSpec
 from dental_image_organizer.services import composite, headless_composite
-from dental_image_organizer.services.headless_composite import run_composite
+from dental_image_organizer.services.headless_composite import (
+    DAMAGED_CLASSIFIER_NOTE,
+    run_composite,
+)
 from support.fake_model import build_fake_model
 from support.views import make_view
 
@@ -273,6 +276,56 @@ def test_classifier_of_an_older_model_asks_for_new_samples(
     assert result.exit_code == 0, result.output
     assert "The AI model changed" in result.output
     assert "Slots were assigned by shooting order:" not in result.output
+
+
+def test_a_damaged_classifier_falls_back_to_shooting_order(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    (tmp_path / "data" / "classifier").mkdir(parents=True)
+    (tmp_path / "data" / "classifier" / "model.json").write_text("", encoding="utf-8")
+
+    result = _invoke(set_dir, tmp_path / "out")
+
+    assert result.exit_code == 0, result.output
+    assert DAMAGED_CLASSIFIER_NOTE in result.output
+    assert "Slots were assigned by shooting order:" not in result.output
+    assert (tmp_path / "out" / OUTPUT).exists()
+
+
+def test_learning_drops_a_damaged_classifier_it_cannot_rebuild_yet(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    model_file = tmp_path / "data" / "classifier" / "model.json"
+    model_file.parent.mkdir(parents=True)
+    model_file.write_text("", encoding="utf-8")
+
+    result = _invoke(set_dir, tmp_path / "out", "--learn")
+
+    assert result.exit_code == 0, result.output
+    assert DAMAGED_CLASSIFIER_NOTE in result.output
+    assert "the AI classifier is not trained yet" in result.output
+    # Left in place, it would be reported as damaged on every later run.
+    assert not model_file.exists()
+
+
+def test_a_damaged_sample_store_stops_learning_before_any_output(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    folder = tmp_path / "data" / "classifier"
+    folder.mkdir(parents=True)
+    (folder / "samples.npz").write_bytes(b"")
+
+    result = _invoke(set_dir, tmp_path / "out", "--learn")
+
+    assert result.exit_code == 1, result.output
+    assert (
+        f"The AI sample store in {folder} is damaged; move that folder aside to start over."
+        in result.output
+    )
+    assert not (tmp_path / "out").exists()
 
 
 def test_a_second_run_never_overwrites_the_first_composite(set_dir: Path, tmp_path: Path) -> None:

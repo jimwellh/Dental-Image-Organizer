@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import os
+import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
+from zipfile import BadZipFile
 
 import numpy as np
 import numpy.typing as npt
+import structlog
 
 from dental_image_organizer.core.slots import SLOTS, Slot
+from dental_image_organizer.errors import StorageError
 from dental_image_organizer.ml.embedder import EMBEDDING_DIM, EmbeddingPair
 
 SampleSource = Literal["export", "teach"]
 SAMPLES_FILE = "samples.npz"
+
+_log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -56,19 +62,31 @@ class SampleStore:
         self.path = directory / SAMPLES_FILE
 
     def load(self) -> SampleSet:
+        """The stored samples; raises StorageError when the file cannot be read back."""
         if not self.path.exists():
             return empty_samples()
-        with np.load(self.path, allow_pickle=False) as data:
-            return SampleSet(
-                EmbeddingPair(
-                    data["original"].astype(np.float32), data["mirrored"].astype(np.float32)
-                ),
-                cast("tuple[Slot, ...]", tuple(data["slots"].tolist())),
-                tuple(data["case_ids"].tolist()),
-                cast("tuple[SampleSource, ...]", tuple(data["sources"].tolist())),
-                data["timestamps"].astype(np.float64),
-                tuple(data["model_hashes"].tolist()),
-            )
+        try:
+            # A .npy file in its place loads as a bare array, which is no context manager:
+            # TypeError. A corrupt compressed member raises zlib.error.
+            with np.load(self.path, allow_pickle=False) as data:
+                samples = SampleSet(
+                    EmbeddingPair(
+                        data["original"].astype(np.float32), data["mirrored"].astype(np.float32)
+                    ),
+                    cast("tuple[Slot, ...]", tuple(data["slots"].tolist())),
+                    tuple(data["case_ids"].tolist()),
+                    cast("tuple[SampleSource, ...]", tuple(data["sources"].tolist())),
+                    data["timestamps"].astype(np.float64),
+                    tuple(data["model_hashes"].tolist()),
+                )
+            _check_consistent(samples)
+        except (BadZipFile, EOFError, KeyError, OSError, TypeError, ValueError, zlib.error) as exc:
+            _log.error("sample_store_damaged", error=type(exc).__name__)
+            raise StorageError(
+                f"The AI sample store in {self.path.parent} is damaged; "
+                "move that folder aside to start over."
+            ) from exc
+        return samples
 
     def append(
         self,
@@ -111,4 +129,29 @@ class SampleStore:
                 timestamps=samples.timestamps,
                 model_hashes=np.array(samples.model_hashes, dtype=str),
             )
+            # Without the fsync, a power loss soon after the rename can leave an empty file.
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, self.path)
+
+
+def _check_consistent(samples: SampleSet) -> None:
+    # Arrays that parse but disagree would otherwise fail later, while training.
+    count = len(samples.slots)
+    lengths = {
+        len(samples.pairs.original),
+        len(samples.pairs.mirrored),
+        count,
+        len(samples.case_ids),
+        len(samples.sources),
+        len(samples.timestamps),
+        len(samples.model_hashes),
+    }
+    if lengths != {count}:
+        raise ValueError("the sample arrays differ in length")
+    if samples.pairs.original.shape[1:] != (EMBEDDING_DIM,) or (
+        samples.pairs.mirrored.shape[1:] != (EMBEDDING_DIM,)
+    ):
+        raise ValueError("the sample embeddings do not fit the embedding model")
+    if not set(samples.slots) <= set(SLOTS):
+        raise ValueError("a sample names an unknown slot")
