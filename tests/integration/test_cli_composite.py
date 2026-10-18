@@ -17,7 +17,7 @@ from dental_image_organizer.core.geometry import flip_pixels
 from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS
 from dental_image_organizer.errors import ModelUnavailableError
 from dental_image_organizer.ml.model_store import ModelSpec
-from dental_image_organizer.services import headless_composite
+from dental_image_organizer.services import composite, headless_composite
 from dental_image_organizer.services.headless_composite import run_composite
 from support.fake_model import build_fake_model
 from support.views import make_view
@@ -215,6 +215,28 @@ def test_corrupt_photo_leaves_its_slot_empty(set_dir: Path, tmp_path: Path) -> N
 
     assert result.exit_code == 1, result.output
     assert "IMG_0005.jpg: " in result.output
+    assert (tmp_path / "out" / OUTPUT).exists()
+
+
+def test_photo_that_fails_planning_leaves_its_slot_empty(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_normalize_view = composite.normalize_view
+
+    def normalize_failing_on_upper_left(image: np.ndarray, slot: str, *rest: Any) -> Any:
+        if slot == "upper_left":
+            raise ValueError("synthetic leveling failure")
+        return real_normalize_view(image, slot, *rest)
+
+    monkeypatch.setattr(composite, "normalize_view", normalize_failing_on_upper_left)
+
+    result = _invoke(set_dir, tmp_path / "out")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), result.exception
+    lines = _lines(result)
+    assert "upper_left" not in lines
+    assert "IMG_0003.jpg: Unexpected ValueError: synthetic leveling failure" in lines["failed"]
     assert (tmp_path / "out" / OUTPUT).exists()
 
 

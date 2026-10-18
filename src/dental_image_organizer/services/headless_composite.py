@@ -185,6 +185,11 @@ def run_composite(
         notes.append(MTIME_WARNING)
 
     plan = plan_composite(images, assignment, flips=options.flips, baseline=options.baseline)
+    for photo, exc in plan.failed.items():
+        working = workings[photo]
+        problems[working.number] = PhotoOutcome(
+            working.source, "failed", message=_failure_message(exc)
+        )
 
     rendered: dict[Slot, RGBImage] = {}
     cells: list[CellOutcome] = []
@@ -316,6 +321,11 @@ def _render_full(path: Path, cell: CellPlan) -> RGBImage | PhotoOutcome:
         # is logged for fixing the cause.
         log.exception("photo_failed")
         return PhotoOutcome(path, "failed", message=unexpected_message(exc))
+
+
+def _failure_message(exc: Exception) -> str:
+    # plan_composite has logged the trace already; this only words the reported message.
+    return os_error_message(exc) if isinstance(exc, OSError) else unexpected_message(exc)
 
 
 def _cell_outcome(cell: CellPlan, source: Path) -> CellOutcome:

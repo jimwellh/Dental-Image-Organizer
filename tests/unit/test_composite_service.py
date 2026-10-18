@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from typing import Any
 
 import numpy as np
 import pytest
@@ -8,6 +9,7 @@ from dental_image_organizer.core.slots import DEFAULT_FLIPS, GROUPS, SLOTS
 from dental_image_organizer.ml.assignment import assign_by_order
 from dental_image_organizer.ml.classifier import SlotClassifier
 from dental_image_organizer.ml.embedder import EMBEDDING_DIM, EmbeddingPair
+from dental_image_organizer.services import composite
 from dental_image_organizer.services.composite import (
     assign_photos,
     compose,
@@ -55,6 +57,66 @@ def test_a_tenth_photo_goes_to_the_tray(raw_set: list[np.ndarray]) -> None:
     plan = plan_composite(raw_set + raw_set[:1], assign_by_order(TIMES, SLOTS), flips=DEFAULT_FLIPS)
 
     assert plan.tray == (9,)
+
+
+def test_a_photo_that_fails_planning_leaves_only_its_slot_empty(
+    raw_set: list[np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_normalize_view = composite.normalize_view
+
+    def normalize_failing_on_upper_left(image: np.ndarray, slot: str, *rest: Any) -> Any:
+        if slot == "upper_left":
+            raise ValueError("synthetic leveling failure")
+        return real_normalize_view(image, slot, *rest)
+
+    monkeypatch.setattr(composite, "normalize_view", normalize_failing_on_upper_left)
+
+    plan = plan_composite(raw_set, assign_by_order(TIMES[:9], SLOTS), flips=DEFAULT_FLIPS)
+
+    assert list(plan.cells) == [s for s in SLOTS if s != "upper_left"]
+    assert list(plan.failed) == [2] and isinstance(plan.failed[2], ValueError)
+    assert plan.baseline == "occlusion_front"
+
+
+def test_a_failed_baseline_falls_back_to_the_first_surviving_slot(
+    raw_set: list[np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_render = composite.render
+    baseline_photo = raw_set[SLOTS.index("occlusion_front")]
+
+    def render_failing_on_the_baseline(image: np.ndarray, *args: Any, **kwargs: Any) -> Any:
+        if image is baseline_photo:
+            raise MemoryError  # the color preview is the first render in planning
+        return real_render(image, *args, **kwargs)
+
+    monkeypatch.setattr(composite, "render", render_failing_on_the_baseline)
+
+    plan = plan_composite(raw_set, assign_by_order(TIMES[:9], SLOTS), flips=DEFAULT_FLIPS)
+
+    assert "occlusion_front" not in plan.cells and list(plan.failed) == [4]
+    assert plan.baseline == "upper_right" and plan.cells["upper_right"].color is None
+    assert all(plan.cells[s].color is not None for s in plan.cells if s != "upper_right")
+
+
+def test_a_failed_color_fit_fails_only_that_photo(
+    raw_set: list[np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_fit = composite.fit_reinhard
+    calls = 0
+
+    def fit_failing_once(*args: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:  # cells are fitted in grid order, so this is upper_right
+            raise ValueError("synthetic fit failure")
+        return real_fit(*args)
+
+    monkeypatch.setattr(composite, "fit_reinhard", fit_failing_once)
+
+    plan = plan_composite(raw_set, assign_by_order(TIMES[:9], SLOTS), flips=DEFAULT_FLIPS)
+
+    assert list(plan.cells) == list(SLOTS[1:]) and list(plan.failed) == [0]
+    assert plan.baseline == "occlusion_front"
 
 
 def test_composite_is_three_by_three_cells(raw_set: list[np.ndarray]) -> None:

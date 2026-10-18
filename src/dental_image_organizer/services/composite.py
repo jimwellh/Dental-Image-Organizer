@@ -47,11 +47,14 @@ class CellPlan:
 
 @dataclass(frozen=True)
 class CompositePlan:
+    """`failed` maps each photo whose planning raised to its exception; its slot has no cell."""
+
     cells: dict[Slot, CellPlan]
     tray: tuple[int, ...]
     method: AssignMethod
     low_confidence: frozenset[Slot]
     baseline: Slot | None
+    failed: dict[int, Exception]
 
 
 def assign_photos(
@@ -79,25 +82,33 @@ def plan_composite(
     if len(images) != len(assignment.slots):
         raise ValueError(f"got {len(images)} images for {len(assignment.slots)} assigned photos")
     slot_map = assignment.slot_map
+    failed: dict[int, Exception] = {}
     geometries: dict[Slot, CellGeometry] = {}
     for slot in SLOTS:
         if slot not in slot_map:
             continue
-        photo = slot_map[slot]
+        photo, flip = slot_map[slot], flips[slot]
         # core/ only sees pixels; binding the position tags its events without file names.
         with structlog.contextvars.bound_contextvars(photo=photo + 1):
-            geometries[slot] = normalize_view(images[photo], slot, flips[slot], cell_size)
+            try:
+                geometries[slot] = normalize_view(images[photo], slot, flip, cell_size)
+            except Exception as exc:
+                # A photo that breaks leveling, cropping, or its color fit leaves only its cell
+                # empty; it never aborts the composite (spec §4.13). The trace is for the cause.
+                log.exception("photo_failed")
+                failed[photo] = exc
 
-    chosen = baseline if baseline in geometries else next(iter(geometries), None)
-    colors = _fit_colors(images, slot_map, geometries, chosen, cell_size)
+    chosen, colors, color_failed = _fit_colors(images, slot_map, geometries, baseline, cell_size)
+    failed |= color_failed
     cells = {
         slot: CellPlan(
             slot, slot_map[slot], geometry, colors.get(slot), assignment.confidences[slot_map[slot]]
         )
         for slot, geometry in geometries.items()
+        if slot_map[slot] not in failed
     }
     tray = tuple(i for i, slot in enumerate(assignment.slots) if slot is None)
-    return CompositePlan(cells, tray, assignment.method, assignment.low_confidence, chosen)
+    return CompositePlan(cells, tray, assignment.method, assignment.low_confidence, chosen, failed)
 
 
 def render_cell(image: RGBImage, cell: CellPlan, cell_size: tuple[int, int]) -> RGBImage:
@@ -118,26 +129,47 @@ def _fit_colors(
     images: Sequence[RGBImage],
     slot_map: Mapping[Slot, int],
     geometries: Mapping[Slot, CellGeometry],
-    baseline: Slot | None,
+    baseline: Slot,
     cell_size: tuple[int, int],
-) -> dict[Slot, LabAffine]:
-    if baseline is None:
-        return {}
+) -> tuple[Slot | None, dict[Slot, LabAffine], dict[int, Exception]]:
+    """Match each cell to the baseline: returns the baseline used, the fits, and the failures."""
     # Small renders keep the fit cheap, and the normalized transforms make them match the
     # full-size cells that are rendered later.
     width = COLOR_ANALYSIS_WIDTH
     size = (width, max(1, round(width * cell_size[1] / cell_size[0])))
+    failed: dict[int, Exception] = {}
     previews: dict[Slot, RGBImage] = {}
     regions: dict[Slot, BoolMask] = {}
     for slot, geometry in geometries.items():
-        preview = render(
-            images[slot_map[slot]], geometry.transform, size, interpolation=cv2.INTER_AREA
-        )
-        teeth = tooth_mask(preview)
-        previews[slot] = preview
-        regions[slot] = teeth | gingiva_mask(preview, teeth)
-    return {
-        slot: fit_reinhard(previews[slot], regions[slot], previews[baseline], regions[baseline])
-        for slot in geometries
-        if slot != baseline
-    }
+        photo = slot_map[slot]
+        with structlog.contextvars.bound_contextvars(photo=photo + 1):
+            try:
+                preview = render(
+                    images[photo], geometry.transform, size, interpolation=cv2.INTER_AREA
+                )
+                teeth = tooth_mask(preview)
+                region = teeth | gingiva_mask(preview, teeth)
+            except Exception as exc:
+                log.exception("photo_failed")
+                failed[photo] = exc
+            else:
+                previews[slot], regions[slot] = preview, region
+
+    # The requested baseline if it survived, else the first filled slot in grid order.
+    chosen = baseline if baseline in previews else next(iter(previews), None)
+    if chosen is None:
+        return None, {}, failed
+    colors: dict[Slot, LabAffine] = {}
+    for slot in previews:
+        if slot == chosen:
+            continue
+        photo = slot_map[slot]
+        with structlog.contextvars.bound_contextvars(photo=photo + 1):
+            try:
+                colors[slot] = fit_reinhard(
+                    previews[slot], regions[slot], previews[chosen], regions[chosen]
+                )
+            except Exception as exc:
+                log.exception("photo_failed")
+                failed[photo] = exc
+    return chosen, colors, failed
