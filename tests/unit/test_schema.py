@@ -195,7 +195,8 @@ def _edit_photo(doc: dict[str, Any], index: int, **changes: Any) -> dict[str, An
 
 
 def _invalid_cases() -> dict[str, dict[str, Any]]:
-    proc, comp = as_doc(make_procedure()), as_doc(make_composite())
+    proc_case = make_procedure()
+    proc, comp = as_doc(proc_case), as_doc(make_composite())
     cases: dict[str, dict[str, Any]] = {}
 
     def add(name: str, base: dict[str, Any], **top: Any) -> dict[str, Any]:
@@ -223,6 +224,14 @@ def _invalid_cases() -> dict[str, dict[str, Any]]:
     _edit_photo(add("member_in_procedure", proc), 1, role="member")
     _edit_photo(add("flip_in_procedure", proc), 0, edit=make_edit(flip="none").model_dump())
     add("procedure_without_sequence", proc, sequence=None)
+    for label, cell in (("small", [50, 800]), ("large", [5000, 800])):
+        add(f"cell_size_{label}", comp, composite={**comp["composite"], "cell_size": cell})
+    for label, gap in (("negative", -1), ("large", 201)):
+        add(f"gap_px_{label}", comp, composite={**comp["composite"], "gap_px": gap})
+    add("gap_color_name", comp, composite={**comp["composite"], "gap_color": "red"})
+    for label, size in (("side", [70000, 10]), ("pixels", [20000, 20000])):
+        edit = as_doc(proc_case)["photos"][0]["edit"] | {"output_size": size}
+        _edit_photo(add(f"output_size_{label}", proc), 0, edit=edit)
     return cases
 
 
@@ -258,3 +267,9 @@ def test_case_helpers() -> None:
     assert replaced.photo(target.id).stage == "post_op"
     assert replaced.validated() == replaced
     assert schema.OUTPUT_SCALES == (1.0, 1.5, 2.0)
+
+
+def test_composite_layout_at_the_bounds_is_accepted() -> None:
+    doc = as_doc(make_composite())
+    doc["composite"].update(cell_size=[100, 4000], gap_px=200, gap_color="#FFaa00")
+    assert parse_case(json.dumps(doc).encode()).composite is not None

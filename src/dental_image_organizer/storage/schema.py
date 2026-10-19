@@ -22,6 +22,7 @@ from pydantic import (
 from dental_image_organizer.core import transform as tf
 from dental_image_organizer.core.align import AlignModel
 from dental_image_organizer.core.color import LabAffine, LabCurves, LabTransform
+from dental_image_organizer.core.imageio import MAX_JPEG_DIMENSION, MAX_PIXELS
 from dental_image_organizer.core.slots import Flip, Slot
 from dental_image_organizer.errors import PhotoNotFoundError, StorageError
 
@@ -33,6 +34,12 @@ SHA256_PATTERN = r"^[0-9a-f]{64}$"
 # can never point outside the case folder.
 ORIGINAL_FILE_PATTERN = r"^originals/[0-9a-f]{16}\.(heic|jpg|png)$"
 EXPORT_FILE_PATTERN = r"^export/[^/\\]+$"
+# Layout bounds, shared with config.Settings: a hand-edited or imported record must not be able
+# to make a later render allocate an enormous canvas.
+CELL_SIDE_MIN = 100
+CELL_SIDE_MAX = 4000
+GAP_PX_MAX = 200
+GAP_COLOR_PATTERN = r"^#[0-9A-Fa-f]{6}$"
 
 CaseType = Literal["procedure", "composite"]
 Role = Literal["reference", "photo", "member"]
@@ -46,6 +53,10 @@ ExportKind = Literal["single", "sequence", "composite"]
 
 Id = Annotated[str, Field(pattern=ID_PATTERN)]
 Size = tuple[PositiveInt, PositiveInt]
+CellSize = tuple[
+    Annotated[int, Field(ge=CELL_SIDE_MIN, le=CELL_SIDE_MAX)],
+    Annotated[int, Field(ge=CELL_SIDE_MIN, le=CELL_SIDE_MAX)],
+]
 
 
 def new_id() -> str:
@@ -83,6 +94,14 @@ class EditRecord(_Record):
     message: str | None = None
     algorithm_version: str
     flip: Flip | None = None
+
+    @field_validator("output_size")
+    @classmethod
+    def _output_size_limits(cls, value: tuple[int, int]) -> tuple[int, int]:
+        # Same limits the live pipeline enforces (services.procedure.output_size).
+        if max(value) > MAX_JPEG_DIMENSION or value[0] * value[1] > MAX_PIXELS:
+            raise ValueError("output_size exceeds the supported image size")
+        return value
 
     def matrix(self) -> tf.Matrix:
         return np.asarray(self.transform, dtype=np.float64).reshape(3, 3)
@@ -126,14 +145,14 @@ class PhotoRecord(_Record):
 
 class SequenceRecord(_Record):
     photo_ids: list[Id] = []
-    gap_px: int = Field(default=0, ge=0, le=200)
+    gap_px: int = Field(default=0, ge=0, le=GAP_PX_MAX)
 
 
 class CompositeRecord(_Record):
     baseline_photo_id: Id | None
-    cell_size: Size
-    gap_px: int
-    gap_color: str
+    cell_size: CellSize
+    gap_px: int = Field(ge=0, le=GAP_PX_MAX)
+    gap_color: str = Field(pattern=GAP_COLOR_PATTERN)
     slots_source: EditSource
 
 

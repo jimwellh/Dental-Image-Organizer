@@ -13,8 +13,14 @@ from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS, Flip, Slot
 from dental_image_organizer.errors import StorageError
 from dental_image_organizer.paths import APP_DIR_ENV
 from dental_image_organizer.storage.atomic import write_atomic
+from dental_image_organizer.storage.schema import (
+    CELL_SIDE_MAX,
+    CELL_SIDE_MIN,
+    GAP_COLOR_PATTERN,
+    GAP_PX_MAX,
+)
 
-_HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}")
+_HEX_COLOR = re.compile(GAP_COLOR_PATTERN)
 
 
 def default_library_root() -> Path:
@@ -31,7 +37,7 @@ class Settings(BaseModel):
     jpeg_quality: int = Field(default=92, ge=50, le=100)
     strip_gps: bool = True
     cell_size: tuple[int, int] = (1200, 800)
-    gap_px: int = Field(default=0, ge=0, le=200)
+    gap_px: int = Field(default=0, ge=0, le=GAP_PX_MAX)
     gap_color: str = "#000000"
     shooting_order: tuple[Slot, ...] = SLOTS
     flip_start: dict[Slot, Flip] = Field(default_factory=lambda: dict(DEFAULT_FLIPS))
@@ -49,7 +55,7 @@ class Settings(BaseModel):
     @field_validator("cell_size")
     @classmethod
     def _cell_size_range(cls, value: tuple[int, int]) -> tuple[int, int]:
-        if not all(100 <= side <= 4000 for side in value):
+        if not all(CELL_SIDE_MIN <= side <= CELL_SIDE_MAX for side in value):
             raise ValueError("each side of cell_size must be 100-4000")
         return value
 
