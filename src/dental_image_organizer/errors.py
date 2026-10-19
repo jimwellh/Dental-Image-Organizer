@@ -1,12 +1,17 @@
 """Domain exceptions (spec §4.13). Each class carries a stable machine-readable `code`."""
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 SkipReason = Literal["video", "raw", "sidecar", "unknown"]
 
 
 class DioError(Exception):
     code = "dio_error"
+
+    def __init__(self, message: str = "", *, details: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.details: dict[str, Any] = dict(details) if details else {}
 
 
 class UnsupportedFormatError(DioError):
@@ -43,3 +48,59 @@ class ModelUnavailableError(DioError):
 
 class ModelIntegrityError(DioError):
     code = "model_integrity"
+
+
+class NotFoundError(DioError):
+    code = "not_found"
+
+
+class PatientNotFoundError(NotFoundError):
+    code = "patient_not_found"
+
+
+class CaseNotFoundError(NotFoundError):
+    code = "case_not_found"
+
+
+class PhotoNotFoundError(NotFoundError):
+    code = "photo_not_found"
+
+
+class JobNotFoundError(NotFoundError):
+    code = "job_not_found"
+
+
+class TeachSessionNotFoundError(NotFoundError):
+    code = "teach_session_not_found"
+
+
+class ConflictError(DioError):
+    code = "conflict"
+
+
+class JobRunningError(ConflictError):
+    code = "job_running"
+
+
+class CaseExistsError(ConflictError):
+    code = "case_exists"
+
+
+class NotReadyError(ConflictError):
+    code = "not_ready"
+
+
+class InvalidRequestError(DioError):
+    code = "invalid_request"
+
+
+class InvalidEditError(InvalidRequestError):
+    code = "invalid_edit"
+
+
+class InvalidArchiveError(DioError):
+    code = "invalid_archive"
+
+
+class PathOutsideLibraryError(DioError):
+    code = "path_outside_library"
