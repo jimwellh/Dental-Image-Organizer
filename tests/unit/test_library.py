@@ -15,6 +15,7 @@ from dental_image_organizer.errors import (
     CaseNotFoundError,
     InvalidNameError,
     PathOutsideLibraryError,
+    StorageError,
 )
 from dental_image_organizer.storage.library import CaseLocks, Library
 from dental_image_organizer.storage.schema import PhotoRecord, new_id
@@ -247,3 +248,89 @@ def test_resolve_rejects_a_symlink_that_leaves_the_library(lib: Library, tmp_pat
         pytest.skip("symlinks are not permitted on this host")
     with pytest.raises(PathOutsideLibraryError):
         lib.resolve("link/photo.jpg")
+
+
+def test_a_failed_listing_never_reuses_a_taken_name(
+    lib: Library, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lib.create_patient("Alex Wang", None)
+    path = lib.root / "Alex Wang" / "patient.json"
+    before = path.read_bytes()
+
+    def denied(self: Path) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "iterdir", denied)
+    with pytest.raises(StorageError):
+        lib.create_patient("Alex Wang", None)
+    assert path.read_bytes() == before
+
+
+def test_unreadable_folders_are_reported(lib: Library, monkeypatch: pytest.MonkeyPatch) -> None:
+    a = lib.create_patient("Anna", None)
+    b = lib.create_patient("Ben", None)
+    lib.create_case(a.id, "procedure", "x")
+    real_scandir = os.scandir
+
+    def scandir(path: str | Path):  # type: ignore[no-untyped-def]
+        if Path(path).name == "Ben":
+            raise PermissionError(13, "Permission denied")
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    listing = lib.listing()
+    assert {e.record.id for e in listing.patients} == {a.id, b.id}
+    assert [p.folder for p in listing.problems] == ["Ben"]
+    assert "could not be read" in listing.problems[0].message
+
+    def root_denied(path: str | Path):  # type: ignore[no-untyped-def]
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "scandir", root_denied)
+    listing = lib.listing()
+    assert [p.folder for p in listing.problems] == ["."]
+
+
+def test_a_symlinked_case_folder_is_not_listed(lib: Library, tmp_path: Path) -> None:
+    other = Library(tmp_path / "elsewhere", CaseLocks(), clock=Clock())
+    outsider = other.create_patient("Out", None)
+    outside_case = other.create_case(outsider.id, "procedure", "t")
+    patient = lib.create_patient("Alex Wang", None)
+    link = lib.root / "Alex Wang" / "20261016 link"
+    try:
+        os.symlink(other.case_dir(outside_case.id), link, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not permitted on this host")
+    assert lib.listing().patients[0].cases == ()
+    assert patient.id
+    with pytest.raises(CaseNotFoundError):
+        lib.read_case(outside_case.id)
+
+
+def test_update_patient_waits_for_case_locks(lib: Library) -> None:
+    locks = lib._locks
+    patient = lib.create_patient("Alex Wang", None)
+    case = lib.create_case(patient.id, "procedure", "implant 16")
+    held, release = threading.Event(), threading.Event()
+
+    def holder() -> None:
+        with locks.hold(case.id):
+            held.set()
+            release.wait(5)
+
+    t1 = threading.Thread(target=holder)
+    t1.start()
+    assert held.wait(5)
+    t2 = threading.Thread(
+        target=lambda: lib.update_patient(patient.id, name="Alex Wong", note=None)
+    )
+    t2.start()
+    t2.join(0.3)
+    assert t2.is_alive()
+    assert (lib.root / "Alex Wang").exists()
+    release.set()
+    t1.join(5)
+    t2.join(5)
+    assert not t2.is_alive()
+    assert (lib.root / "Alex Wong").is_dir()
+    assert lib.read_case(case.id).id == case.id

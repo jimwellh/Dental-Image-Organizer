@@ -4,6 +4,8 @@ Lock order: always take a case lock before the I/O lock, never the reverse. A me
 the I/O lock must never wait for a case lock, otherwise two threads could each hold one and wait
 for the other. `update_case` holds the case lock for the whole change but the I/O lock only
 around its read and its write, so a slow change of one case never blocks reads of another.
+`update_patient` renames a folder that holds many cases, so it takes all of their case locks
+first, in sorted id order: two such callers then acquire in the same order and cannot deadlock.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import re
 import threading
 import unicodedata
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -128,13 +130,23 @@ def _sig(path: Path) -> _Sig | None:
     return (st.st_mtime_ns, st.st_size)
 
 
-def _child_dirs(parent: Path) -> list[Path]:
+_ABSENT = (FileNotFoundError, NotADirectoryError)
+
+
+def _child_dirs(parent: Path) -> tuple[list[Path], str | None]:
+    """Sub-folders in sorted order, plus a reason when the folder exists but cannot be read."""
     try:
         with os.scandir(parent) as it:
-            names = [e.name for e in it if not e.name.startswith(".") and e.is_dir()]
-    except OSError:
-        return []
-    return [parent / name for name in sorted(names)]
+            # Symlinks are skipped: a link that leaves the library would put reads and writes
+            # of case.json outside the root.
+            names = [
+                e.name for e in it if not e.name.startswith(".") and e.is_dir(follow_symlinks=False)
+            ]
+    except _ABSENT:
+        return [], None
+    except OSError as exc:
+        return [], f"The folder could not be read: {_reason(exc)}."
+    return [parent / name for name in sorted(names)], None
 
 
 class Library:
@@ -168,9 +180,15 @@ class Library:
     def _parse[T](
         self, path: Path, parser: Callable[[bytes], T], seen: dict[Path, _Parsed[Any]]
     ) -> _Parsed[T] | None:
-        sig = _sig(path)
-        if sig is None:
+        try:
+            st = path.stat()
+        except _ABSENT:
             return None
+        except OSError as exc:
+            failed = _Parsed[T]((-1, -1), None, f"The file could not be read: {_reason(exc)}.")
+            seen[path] = failed
+            return failed
+        sig = (st.st_mtime_ns, st.st_size)
         cached = self._files.get(path)
         if cached is not None and cached.sig == sig:
             seen[path] = cached
@@ -192,7 +210,10 @@ class Library:
             patients: list[PatientEntry] = []
             patient_dirs: dict[str, Path] = {}
             case_dirs: dict[str, Path] = {}
-            for pdir in _child_dirs(self._root):
+            pdirs, root_error = _child_dirs(self._root)
+            if root_error:
+                problems.append(LibraryProblem(".", root_error))
+            for pdir in pdirs:
                 parsed_patient = self._parse(pdir / PATIENT_FILE, parse_patient, seen)
                 if parsed_patient is None:
                     continue  # not a folder of this app
@@ -206,7 +227,10 @@ class Library:
                     continue
                 patient_dirs[patient.id] = pdir
                 cases: list[CaseRecord] = []
-                for cdir in _child_dirs(pdir):
+                cdirs, patient_error = _child_dirs(pdir)
+                if patient_error:
+                    problems.append(LibraryProblem(pdir.name, patient_error))
+                for cdir in cdirs:
                     parsed_case = self._parse(cdir / CASE_FILE, parse_case, seen)
                     if parsed_case is None:
                         continue
@@ -283,8 +307,11 @@ class Library:
     def _unique(self, parent: Path, base: str, *, exclude: Path | None = None) -> str:
         try:
             taken = {_key(p.name) for p in parent.iterdir() if p != exclude}
-        except OSError:
-            taken = set()
+        except FileNotFoundError:
+            taken = set()  # the folder does not exist yet, so nothing is taken
+        except OSError as exc:
+            # Guessing "nothing taken" here would overwrite another case's or patient's file.
+            raise StorageError(f"Listing the folder failed: {_reason(exc)}") from exc
         name, n = base, 2
         while _key(name) in taken:
             name = f"{base} ({n})"
@@ -312,19 +339,26 @@ class Library:
     def update_patient(self, patient_id: str, *, name: str, note: str | None) -> PatientRecord:
         display = unicodedata.normalize("NFC", name).strip()
         base = folder_name(display)
-        with self._io:
-            folder = self._patient_dir(patient_id)
-            current = self.patient(patient_id).record
-            target = folder.name
-            if base != folder.name:
-                target = self._unique(self._root, base, exclude=folder)
-            if target != folder.name:
-                self._rename(folder, self._root / target)
-            record = PatientRecord(
-                id=current.id, name=display, note=note, created_at=current.created_at
-            )
-            self._write(self._root / target / PATIENT_FILE, record, "patient")
-            return record
+        while True:
+            ids = sorted(c.id for c in self.patient(patient_id).cases)
+            with ExitStack() as stack:
+                for case_id in ids:
+                    stack.enter_context(self._locks.hold(case_id))
+                with self._io:
+                    entry = self.patient(patient_id)
+                    if sorted(c.id for c in entry.cases) != ids:
+                        continue  # a case appeared meanwhile; lock it too
+                    folder, current = entry.folder, entry.record
+                    target = folder.name
+                    if base != folder.name:
+                        target = self._unique(self._root, base, exclude=folder)
+                    if target != folder.name:
+                        self._rename(folder, self._root / target)
+                    record = PatientRecord(
+                        id=current.id, name=display, note=note, created_at=current.created_at
+                    )
+                    self._write(self._root / target / PATIENT_FILE, record, "patient")
+                    return record
 
     # -- cases ---------------------------------------------------------------------------
 
