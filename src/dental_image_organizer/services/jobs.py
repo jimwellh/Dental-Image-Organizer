@@ -211,11 +211,15 @@ class JobManager:
             self._executor.submit(self._run, job_id)
         except Exception:
             # A shut-down executor refuses work; without this the job and its key stay stuck.
-            log.exception("job_dispatch_failed", job_id=job_id)
+            # Whoever still holds the fn owns the job's end; if it is gone, `cancel_queued` or a
+            # worker already finished (or is running) the job, and finishing it again would
+            # double-notify or publish a failure over a live run.
             with self._lock:
-                error = _CANCELLED if self._closing else _INTERNAL
-                self._fns.pop(job_id, None)
-            self._finish(job_id, {"state": "failed", "error": error})
+                owns = self._fns.pop(job_id, None) is not None
+            if not owns:
+                return
+            log.exception("job_dispatch_failed", job_id=job_id)
+            self._finish(job_id, {"state": "failed", "error": _INTERNAL})
 
     def _run(self, job_id: str) -> None:
         with self._lock:

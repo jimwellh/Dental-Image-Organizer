@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -240,9 +240,11 @@ def test_cancel_queued_also_fails_jobs_waiting_in_the_executor() -> None:
     pool = ThreadPoolExecutor(max_workers=2)
     jobs = JobManager(pool)
     release = threading.Barrier(3, timeout=TIMEOUT)
+    running = threading.Semaphore(0)
     ran: list[str] = []
 
     def blocked(progress: JobProgress) -> None:
+        running.release()
         release.wait()
 
     def third(progress: JobProgress) -> None:
@@ -250,6 +252,8 @@ def test_cancel_queued_also_fails_jobs_waiting_in_the_executor() -> None:
 
     a = jobs.submit("demo", blocked, key="c1")
     b = jobs.submit("demo", blocked, key="c2")
+    assert running.acquire(timeout=TIMEOUT)
+    assert running.acquire(timeout=TIMEOUT)
     c = jobs.submit("demo", third, key="c3")
 
     assert jobs.cancel_queued() == 1
@@ -317,3 +321,49 @@ def test_a_failing_on_finish_hook_never_logs_its_path(executor: ThreadPoolExecut
     assert snap.state == "done"
     assert logs and all("Alex Wang" not in repr(e) for e in logs)
     assert all("exc_info" not in e for e in logs)
+
+
+class _ClosingExecutor:
+    """Runs jobs by hand; its `submit` can close the manager and then refuse, like a shutdown."""
+
+    def __init__(self) -> None:
+        self.manager: JobManager | None = None
+        self.close_on_submit = False
+        self.pending: list[Callable[[str], None]] = []
+        self.args: list[str] = []
+
+    def submit(self, fn: Callable[[str], None], job_id: str) -> None:
+        if self.close_on_submit:
+            assert self.manager is not None
+            self.manager.cancel_queued()
+            raise RuntimeError("cannot schedule new futures after shutdown")
+        self.pending.append(fn)
+        self.args.append(job_id)
+
+
+@pytest.mark.parametrize("path", ["submit", "handoff"])
+def test_a_dispatch_failing_during_close_finishes_the_job_once(path: str) -> None:
+    executor = _ClosingExecutor()
+    finished: list[str] = []
+    jobs = JobManager(executor, on_finish=lambda s: finished.append(s.id))  # type: ignore[arg-type]
+    executor.manager = jobs
+
+    with capture_logs() as logs:
+        if path == "submit":
+            executor.close_on_submit = True
+            target = jobs.submit("demo", lambda p: None, key="k")
+            last = target.id
+        else:
+            first = jobs.submit("demo", lambda p: None, key="k")
+            last = jobs.submit("demo", lambda p: None, key="k").id
+            executor.close_on_submit = True
+            executor.pending[0](executor.args[0])
+            assert jobs.get(first.id).state == "done"
+
+    snap = jobs.get(last)
+    assert snap.state == "failed"
+    assert snap.error == JobError("cancelled", "The app was closing.")
+    assert sorted(finished) == sorted(set(finished))
+    assert finished.count(last) == 1
+    assert not any(e["log_level"] in ("error", "critical") for e in logs)
+    assert not jobs.active("k")
