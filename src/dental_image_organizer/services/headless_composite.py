@@ -436,7 +436,7 @@ def _resolve_ai(options: CompositeOptions, notify: Callable[[str], None]) -> _Ai
             raise
         # A model that cannot be fetched, read, or loaded must not block the composite
         # (spec §4.6).
-        return _AiState(None, None, (f"{exc} {ORDER_FALLBACK_NOTE}",))
+        return _AiState(None, None, (_fallback_note(str(exc)),))
 
 
 def _load_ai(
@@ -484,7 +484,7 @@ def _embed(
         message = f"Running the AI model failed: {_failure_message(exc)}"
         if learn:
             raise ModelUnavailableError(message) from exc
-        return None, (f"{message} {ORDER_FALLBACK_NOTE}",)
+        return None, (_fallback_note(message),)
 
 
 def _load_working(number: int, path: Path, *, with_id: bool) -> _Working | PhotoOutcome:
@@ -533,6 +533,14 @@ def _render_full(path: Path, cell: CellPlan) -> RGBImage | PhotoOutcome:
         # is logged for fixing the cause.
         log.exception("photo_failed")
         return PhotoOutcome(path, "failed", message=unexpected_message(exc))
+
+
+def _fallback_note(reason: str) -> str:
+    # Our error messages carry no closing period, while runtime messages (onnxruntime, an
+    # unexpected exception) often do; either way the note must read as two sentences.
+    reason = reason.rstrip()
+    stop = "" if reason.endswith((".", "!", "?")) else "."
+    return f"{reason}{stop} {ORDER_FALLBACK_NOTE}"
 
 
 def _failure_message(exc: Exception) -> str:

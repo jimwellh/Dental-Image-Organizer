@@ -77,8 +77,7 @@ def download_model(
     """Download into ``cache_dir`` and publish atomically only after hash and size verify."""
     final = cache_dir / spec.filename
     partial = cache_dir / f"{spec.filename}.part"
-    # GitHub redirects release assets to its CDN, so redirects must be followed.
-    http = client or httpx.Client(follow_redirects=True, timeout=TIMEOUT_SECONDS)
+    http = client or _new_client()
     _log.info("model_download_started")
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -118,3 +117,18 @@ def download_model(
             http.close()
     _log.info("model_download_finished")
     return final
+
+
+def _new_client() -> httpx.Client:
+    try:
+        # GitHub redirects release assets to its CDN, so redirects must be followed.
+        return httpx.Client(follow_redirects=True, timeout=TIMEOUT_SECONDS)
+    except (ImportError, ValueError, OSError) as exc:
+        # The client reads proxy and certificate settings from the environment. A SOCKS proxy
+        # without socksio, an unknown proxy scheme, or a missing SSL_CERT_FILE must fall back
+        # like being offline (spec §4.6). The message can carry proxy credentials, so it is
+        # neither logged nor shown.
+        _log.error("model_download_failed", error=type(exc).__name__)
+        raise ModelUnavailableError(
+            "The model could not be downloaded: the proxy or certificate settings cannot be used"
+        ) from exc

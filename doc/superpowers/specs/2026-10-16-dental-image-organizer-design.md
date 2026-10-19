@@ -474,6 +474,9 @@ After alignment, pixel correspondences exist:
   - The CLS token alone discards where things are in the frame. The grid keeps the coarse
     layout, such as which side of the frame the anterior teeth are on.
 - Each photo is embedded twice: as `x` and as its horizontal mirror `x̄`.
+  - `x̄` mirrors the photo left to right before the portrait rotation. For a portrait photo it is
+    therefore `x` flipped top to bottom; flipping the rotated input left to right would mirror the
+    view top to bottom and break the side head's antisymmetry.
 - Inference: onnxruntime CPU EP in batches of 18 (nine photos plus their mirrors). Apple Silicon
   CoreML EP is an optional optimization and is off by default, because it cannot be tested on the
   Windows development host.

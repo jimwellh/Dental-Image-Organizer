@@ -32,7 +32,7 @@ _log = structlog.get_logger(__name__)
 
 @dataclass(frozen=True)
 class EmbeddingPair:
-    """Embeddings of photos and of their horizontally mirrored network inputs."""
+    """Embeddings of photos and of their horizontal mirrors."""
 
     original: Embeddings
     mirrored: Embeddings
@@ -56,6 +56,15 @@ def preprocess(rgb: RGBImage) -> npt.NDArray[np.float32]:
     scaled = small.astype(np.float32) / 255.0
     normalized = (scaled - np.array(IMAGENET_MEAN, np.float32)) / np.array(IMAGENET_STD, np.float32)
     return np.ascontiguousarray(normalized.transpose(2, 0, 1), dtype=np.float32)
+
+
+def mirror_input(rgb: RGBImage, x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+    """The network input of the photo mirrored left to right, given `x = preprocess(rgb)`."""
+    # preprocess turns a portrait photo a quarter turn, which carries its left-right axis onto
+    # the tensor's rows; flipping the columns would mirror it top to bottom and break the side
+    # head's antisymmetry (spec §4.6).
+    axis = 1 if rgb.shape[0] > rgb.shape[1] else 2
+    return np.flip(x, axis=axis)
 
 
 def normalize_blocks(raw: npt.NDArray[np.floating]) -> Embeddings:
@@ -87,9 +96,10 @@ class Embedder:
         mirrors: list[Embeddings] = []
         for start in range(0, len(images), PHOTOS_PER_BATCH):
             chunk = images[start : start + PHOTOS_PER_BATCH]
-            batch = np.stack([preprocess(img) for img in chunk])
+            inputs = [preprocess(img) for img in chunk]
+            mirrors_in = [mirror_input(img, x) for img, x in zip(chunk, inputs, strict=True)]
             # One run of photos plus their mirrors halves the per-call overhead.
-            both = np.concatenate([batch, np.ascontiguousarray(batch[..., ::-1])])
+            both = np.stack(inputs + mirrors_in)
             out = self._session.run([OUTPUT_NAME], {INPUT_NAME: both})[0]
             if out.shape != (2 * len(chunk), EMBEDDING_DIM):
                 raise ModelUnavailableError(

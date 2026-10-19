@@ -42,14 +42,17 @@ def test_each_block_is_unit_length() -> None:
     np.testing.assert_allclose(norms, 1.0, rtol=1e-5)
 
 
+@pytest.mark.parametrize("portrait", [False, True])
 def test_mirror_embedding_equals_embedding_of_the_mirrored_photo(
-    fake_model: tuple[Path, str],
+    fake_model: tuple[Path, str], portrait: bool
 ) -> None:
     embedder = Embedder(*fake_model)
-    photos = [make_view(s, 1) for s in SLOTS] + [
+    views = [make_view(s, 1) for s in SLOTS] + [
         make_view("upper_right", 2),
         make_view("lower_left", 2),
     ]
+    # Portrait photos reach the network turned a quarter turn, which moves their left-right axis.
+    photos = [np.ascontiguousarray(np.rot90(v, k=-1)) for v in views] if portrait else views
 
     pair = embedder.embed(photos)  # 11 photos: more than one batch
     mirrored = embedder.embed([np.ascontiguousarray(p[:, ::-1]) for p in photos])

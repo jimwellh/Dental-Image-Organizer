@@ -397,8 +397,9 @@ def test_a_failed_sample_write_still_reports_the_written_composite(
         "Learning failed: No space left on device. The composite was written; nothing was learned."
         in result.output.splitlines()
     )
-    # The data folder sits in the user's home folder.
-    assert str(tmp_path) not in result.output
+    # The data folder sits in the user's home folder. Only the report on stdout is checked:
+    # result.output also carries the stderr traceback, which names the file by design.
+    assert str(tmp_path) not in result.stdout
 
 
 def test_one_photo_placed_in_two_slots_is_not_learned(
@@ -458,8 +459,10 @@ def test_failed_download_falls_back_to_shooting_order(
     result = _invoke(set_dir, tmp_path / "out", "--download-model")
 
     assert result.exit_code == 0, result.output
-    assert "Downloading the AI model failed: offline" in result.output
-    assert "Slots were assigned by shooting order." in result.output
+    assert (
+        "Downloading the AI model failed: offline. Slots were assigned by shooting order."
+        in result.output.splitlines()
+    )
     assert (tmp_path / "out" / OUTPUT).exists()
 
 
@@ -487,8 +490,8 @@ def test_a_model_that_cannot_be_loaded_falls_back_to_shooting_order(
 
     assert result.exit_code == 0, result.output
     assert (
-        "Cannot load the AI model: broken runtime Slots were assigned by shooting order."
-        in result.output
+        "Cannot load the AI model: broken runtime. Slots were assigned by shooting order."
+        in result.output.splitlines()
     )
     assert "IMG_0001.jpg" in _lines(result)["upper_right"]
     assert (tmp_path / "out" / OUTPUT).exists()
@@ -496,8 +499,9 @@ def test_a_model_that_cannot_be_loaded_falls_back_to_shooting_order(
 
 def _fail_inference(monkeypatch: pytest.MonkeyPatch) -> None:
     def out_of_memory(*_: Any) -> Any:
-        # onnxruntime raises its own exception types, which are not DioError or OSError.
-        raise RuntimeError("allocation failed")
+        # onnxruntime raises its own exception types, which are not DioError or OSError, and
+        # its messages often end with a period of their own.
+        raise RuntimeError("allocation failed.")
 
     monkeypatch.setattr(Embedder, "embed", out_of_memory)
 
@@ -513,8 +517,8 @@ def test_a_model_that_fails_on_the_photos_falls_back_to_shooting_order(
 
     assert result.exit_code == 0, result.output
     assert (
-        "Running the AI model failed: Unexpected RuntimeError: allocation failed "
-        "Slots were assigned by shooting order." in result.output
+        "Running the AI model failed: Unexpected RuntimeError: allocation failed. "
+        "Slots were assigned by shooting order." in result.output.splitlines()
     )
     assert "IMG_0001.jpg" in _lines(result)["upper_right"]
     assert (tmp_path / "out" / OUTPUT).exists()

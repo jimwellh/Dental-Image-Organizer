@@ -90,6 +90,32 @@ def test_a_local_write_error_is_unavailable_and_names_no_path(tmp_path: Path) ->
     assert [e["event"] for e in logs if e["log_level"] == "error"] == ["model_download_failed"]
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        # Without socksio, as a proxy tool's exported shell settings leave it.
+        ("ALL_PROXY", "socks5://user:secret@127.0.0.1:9"),
+        ("ALL_PROXY", "ftp://user:secret@127.0.0.1:21"),
+        ("SSL_CERT_FILE", "missing-secret.pem"),
+    ],
+)
+def test_unusable_network_settings_are_unavailable_and_not_shown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.lower(), raising=False)
+    monkeypatch.setenv(name, str(tmp_path / value) if name == "SSL_CERT_FILE" else value)
+
+    with capture_logs() as logs, pytest.raises(ModelUnavailableError) as info:
+        download_model(_spec(b"x"), tmp_path / "cache")
+
+    assert str(info.value).startswith("The model could not be downloaded")
+    assert "secret" not in str(info.value)
+    assert "secret" not in repr(logs)
+    assert not (tmp_path / "cache").exists()
+
+
 def test_cached_file_with_a_wrong_hash_is_deleted(tmp_path: Path) -> None:
     (tmp_path / "m.onnx").write_bytes(b"stale")
 
