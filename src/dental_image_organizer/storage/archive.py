@@ -23,11 +23,17 @@ from dental_image_organizer.errors import (
     CaseExistsError,
     CaseNotFoundError,
     InvalidArchiveError,
+    InvalidNameError,
     PatientNotFoundError,
     StorageError,
 )
 from dental_image_organizer.storage.atomic import write_atomic
-from dental_image_organizer.storage.library import CASE_FILE, PATIENT_FILE, Library
+from dental_image_organizer.storage.library import (
+    CASE_FILE,
+    PATIENT_FILE,
+    Library,
+    folder_name,
+)
 from dental_image_organizer.storage.schema import (
     ORIGINAL_FILE_PATTERN,
     CaseRecord,
@@ -46,7 +52,14 @@ _CHUNK = 1024 * 1024
 _ORIGINAL = re.compile(ORIGINAL_FILE_PATTERN)
 _MISMATCH = "The archive is damaged: a photo does not match its record."
 # Everything a damaged or hostile member can raise while it is being read.
-_READ_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError)
+_READ_ERRORS = (
+    zipfile.BadZipFile,
+    zlib.error,
+    EOFError,
+    NotImplementedError,
+    RuntimeError,
+    UnicodeDecodeError,
+)
 
 
 @dataclass(frozen=True)
@@ -64,17 +77,21 @@ def write_case_archive(case_dir: Path, out: Path) -> None:
     # Written beside `out` and replaced into it, so a crash never leaves half a zip.
     tmp = out.with_name(f".{out.name}.{uuid4().hex[:8]}.tmp")
     try:
-        with zipfile.ZipFile(tmp, "w") as zf:
-            zf.writestr(PATIENT_FILE, patient_json, compress_type=zipfile.ZIP_DEFLATED)
-            zf.writestr(CASE_FILE, case_json, compress_type=zipfile.ZIP_DEFLATED)
-            # Originals are JPEG/HEIC/PNG already, so deflating them only costs time.
-            for name in dict.fromkeys(p.file for p in case.photos):
-                try:
-                    zf.write(case_dir / name, name, compress_type=zipfile.ZIP_STORED)
-                except FileNotFoundError as exc:
-                    raise StorageError(
-                        "An original photo of this case is missing from its folder."
-                    ) from exc
+        with tmp.open("wb") as f:
+            with zipfile.ZipFile(f, "w") as zf:
+                zf.writestr(PATIENT_FILE, patient_json, compress_type=zipfile.ZIP_DEFLATED)
+                zf.writestr(CASE_FILE, case_json, compress_type=zipfile.ZIP_DEFLATED)
+                # Originals are JPEG/HEIC/PNG already, so deflating them only costs time.
+                for name in dict.fromkeys(p.file for p in case.photos):
+                    try:
+                        zf.write(case_dir / name, name, compress_type=zipfile.ZIP_STORED)
+                    except FileNotFoundError as exc:
+                        raise StorageError(
+                            "An original photo of this case is missing from its folder."
+                        ) from exc
+            # Without the fsync a power loss could leave a truncated zip under the final name.
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, out)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -87,7 +104,7 @@ def import_case_archive(
 ) -> ImportOutcome:
     try:
         zf = zipfile.ZipFile(archive)
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, UnicodeDecodeError, EOFError) as exc:
         raise InvalidArchiveError("This file is not a case archive.") from exc
     with zf:
         infos = _check_members(zf)
@@ -143,6 +160,14 @@ def _read_records(
     except StorageError as exc:
         # The wording stays: a newer schema must still say "newer version".
         raise InvalidArchiveError(str(exc)) from exc
+    # Checked now so an unusable name cannot fail after the patient folder was created.
+    for what, text in (("patient name", patient.name), ("case title", case.title)):
+        try:
+            folder_name(text)
+        except InvalidNameError as exc:
+            raise InvalidArchiveError(
+                f"The archive is damaged: the {what} cannot be used as a folder name."
+            ) from exc
     if case.patient_id != patient.id:
         raise InvalidArchiveError("The archive is damaged: the case belongs to another patient.")
     return patient, case
@@ -210,22 +235,45 @@ def _install(
     existing = _find_case(library, case.id)
     record = case.model_copy(update={"exports": []})  # exports are regenerated, not archived
     if existing is not None:
-        if on_conflict == "ask":
-            raise CaseExistsError(
-                "This case is already in the library.",
-                details={"case_id": existing.id, "title": existing.title},
-            )
-        if on_conflict == "skip":
-            return ImportOutcome("skipped", existing.id, existing.patient_id, existing.title)
+        if on_conflict != "copy":
+            return _conflict(on_conflict, existing.id, existing.patient_id, existing.title)
         record = record.model_copy(update={"id": new_id()})
     record = record.validated()
     write_atomic(staging / CASE_FILE, dump(record))
+    adopted: str | None = None
     try:
         library.patient(patient.id)
     except PatientNotFoundError:
-        library.adopt_patient(patient)
-    library.install_case(staging, record)
+        entry = library.adopt_patient(patient)
+        # adopt_patient hands back the existing entry when another import won the race, and
+        # that one is not ours to undo.
+        if entry.record is patient:
+            adopted = patient.id
+    try:
+        library.install_case(staging, record)
+    except CaseExistsError as exc:
+        # Another import installed this case after the check above.
+        _undo_patient(library, adopted)
+        return _conflict(
+            on_conflict, exc.details["case_id"], record.patient_id, exc.details["title"]
+        )
+    except BaseException:
+        _undo_patient(library, adopted)
+        raise
     return ImportOutcome("imported", record.id, record.patient_id, record.title)
+
+
+def _undo_patient(library: Library, patient_id: str | None) -> None:
+    if patient_id is not None:
+        library.remove_empty_patient(patient_id)
+
+
+def _conflict(policy: ConflictPolicy, case_id: str, patient_id: str, title: str) -> ImportOutcome:
+    if policy == "skip":
+        return ImportOutcome("skipped", case_id, patient_id, title)
+    raise CaseExistsError(
+        "This case is already in the library.", details={"case_id": case_id, "title": title}
+    )
 
 
 def _find_case(library: Library, case_id: str) -> CaseRecord | None:

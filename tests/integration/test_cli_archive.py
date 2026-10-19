@@ -116,3 +116,13 @@ def test_import_refuses_while_the_app_runs(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "quit it first" in result.output
     assert not (tmp_path / "lib" / "Alex Wang").exists()
+
+
+def test_export_case_rejects_a_file_as_the_case_folder(tmp_path: Path) -> None:
+    not_a_folder = tmp_path / "file.txt"
+    not_a_folder.write_text("x")
+
+    result = CliRunner().invoke(app, ["export-case", str(not_a_folder), str(tmp_path / "n.zip")])
+
+    assert result.exit_code == 1
+    assert f"error: {not_a_folder} is not a case folder." in result.output

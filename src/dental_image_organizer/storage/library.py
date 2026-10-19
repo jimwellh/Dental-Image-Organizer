@@ -26,6 +26,7 @@ import structlog
 
 from dental_image_organizer.core.naming import sanitize_component
 from dental_image_organizer.errors import (
+    CaseExistsError,
     CaseNotFoundError,
     InvalidNameError,
     InvalidRequestError,
@@ -371,10 +372,32 @@ class Library:
         display = unicodedata.normalize("NFC", record.name).strip()
         base = folder_name(display)
         with self._io:
+            # Two imports of one archive may both have seen no patient: one id, one folder.
+            try:
+                return self.patient(record.id)
+            except PatientNotFoundError:
+                pass
             folder = self._root / self._unique(self._root, base)
             self._write(folder / PATIENT_FILE, record, "patient")
             self._patient_dirs[record.id] = folder
             return PatientEntry(record, folder, ())
+
+    def remove_empty_patient(self, patient_id: str) -> None:
+        """Undo `adopt_patient` after a failed import. A folder that holds anything else stays."""
+        with self._io:
+            try:
+                folder = self._patient_dir(patient_id)
+                if [p.name for p in folder.iterdir()] != [PATIENT_FILE]:
+                    return
+                (folder / PATIENT_FILE).unlink()
+                folder.rmdir()
+            except PatientNotFoundError:
+                return
+            except OSError as exc:
+                log.warning("patient_rollback_failed", reason=_reason(exc))
+                return
+            self._patient_dirs.pop(patient_id, None)
+            self._files.pop(folder / PATIENT_FILE, None)
 
     # -- cases ---------------------------------------------------------------------------
 
@@ -447,6 +470,15 @@ class Library:
             f"{record.created_at:%Y%m%d} {folder_name(unicodedata.normalize('NFC', record.title))}"
         )
         with self._locks.hold(record.id), self._io:
+            try:
+                existing = self.read_case(record.id)
+            except CaseNotFoundError:
+                pass
+            else:
+                raise CaseExistsError(
+                    "This case is already in the library.",
+                    details={"case_id": existing.id, "title": existing.title},
+                )
             pdir = self._patient_dir(record.patient_id)
             folder = pdir / self._unique(pdir, base)
             try:

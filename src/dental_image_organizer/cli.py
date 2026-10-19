@@ -290,9 +290,7 @@ class _OnConflict(StrEnum):
 
 @app.command("export-case")
 def export_case(
-    case_dir: Annotated[
-        Path, typer.Argument(help="A case folder of the library.", file_okay=False)
-    ],
+    case_dir: Annotated[Path, typer.Argument(help="A case folder of the library.")],
     zip_path: Annotated[Path, typer.Argument(metavar="ZIP", help="The archive to write.")],
 ) -> None:
     """Write one case, with its patient record and originals, to a zip archive."""

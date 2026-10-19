@@ -1,4 +1,5 @@
 import hashlib
+import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -137,6 +138,16 @@ def _write(path: Path, data: bytes) -> Path:
     return path
 
 
+def utf8_flagged_member(src: Path, dest: Path) -> Path:
+    """A member whose name is flagged as UTF-8 but is not valid UTF-8."""
+    stub = dest.with_name("stub.zip")
+    rewrite(src, stub, {}, {"\u00e9\u00e9": b"x"})
+    raw = stub.read_bytes()
+    assert raw.count("\u00e9\u00e9".encode()) == 2  # local header and central directory
+    dest.write_bytes(raw.replace("\u00e9\u00e9".encode(), b"\xff\xfe\xff\xfe"))
+    return dest
+
+
 def bad_archive(name: str, good: Path, tmp_path: Path, case: CaseRecord) -> Path:
     case_json = members(good)["case.json"]
     ref = case.photos[0].file
@@ -155,6 +166,14 @@ def bad_archive(name: str, good: Path, tmp_path: Path, case: CaseRecord) -> Path
         case "other patient":
             changed = case_json.replace(case.patient_id.encode(), new_id().encode())
             return rewrite(good, dest, {"case.json": changed}, {})
+        case "blank title":
+            changed = case_json.replace(b'"title": "implant 16"', b'"title": " . "')
+            return rewrite(good, dest, {"case.json": changed}, {})
+        case "dot patient name":
+            changed = members(good)["patient.json"].replace(b'"name": "Alex Wang"', b'"name": "."')
+            return rewrite(good, dest, {"patient.json": changed}, {})
+        case "invalid utf-8 name":
+            return utf8_flagged_member(good, dest)
         case "newer schema":
             changed = case_json.replace(b'"schema_version": 1', b'"schema_version": 2')
             return rewrite(good, dest, {"case.json": changed}, {})
@@ -171,6 +190,9 @@ def bad_archive(name: str, good: Path, tmp_path: Path, case: CaseRecord) -> Path
         "missing original",
         "other patient",
         "newer schema",
+        "blank title",
+        "dot patient name",
+        "invalid utf-8 name",
     ],
 )
 def test_invalid_archives_change_nothing(
@@ -194,21 +216,44 @@ def test_invalid_archives_change_nothing(
     assert not list(target.root.glob(".importing-*"))
 
 
-def test_member_sizes_are_capped_by_header_and_by_bytes_read(
+def test_member_sizes_are_capped_by_header(
+    source: Library, target: Library, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = build_case(source)
+    good = tmp_path / "good.zip"
+    write_case_archive(source.case_dir(case.id), good)
+    monkeypatch.setattr(archive, "MAX_ORIGINAL_BYTES", len(BYTES[0]) - 1)
+
+    with pytest.raises(InvalidArchiveError, match="too large"):
+        import_case_archive(target, good)
+    assert target.listing().patients == ()
+
+
+def test_copy_capped_stops_at_the_limit_whatever_the_header_says(
+    source: Library, tmp_path: Path
+) -> None:
+    case = build_case(source)
+    good = tmp_path / "good.zip"
+    write_case_archive(source.case_dir(case.id), good)
+    dest = tmp_path / "out.bin"
+
+    with zipfile.ZipFile(good) as zf:
+        info = zf.getinfo(case.photos[0].file)
+        assert info.file_size > 5
+        with pytest.raises(InvalidArchiveError, match="too large"):
+            archive._copy_capped(zf, info, dest, 5)
+
+
+def test_a_forged_header_leaves_no_trace(
     source: Library, target: Library, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     case = build_case(source)
     good = tmp_path / "good.zip"
     write_case_archive(source.case_dir(case.id), good)
     ref = case.photos[0].file
-    monkeypatch.setattr(archive, "MAX_ORIGINAL_BYTES", len(BYTES[0]) - 1)
-
-    with pytest.raises(InvalidArchiveError, match="too large"):
-        import_case_archive(target, good)
-
-    # A header that understates the size must not let the data through.
-    monkeypatch.setattr(archive, "MAX_ORIGINAL_BYTES", len(BYTES[0]))
-    lying = rewrite(good, tmp_path / "lying.zip", {ref: BYTES[0] + b"x" * 5000}, {})
+    # Both honest originals fit; only the forged member is larger than its header claims.
+    monkeypatch.setattr(archive, "MAX_ORIGINAL_BYTES", max(map(len, BYTES)))
+    forged = rewrite(good, tmp_path / "forged.zip", {ref: BYTES[0] + b"x" * 5000}, {})
     real_infolist = zipfile.ZipFile.infolist
 
     def understated(self: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
@@ -219,9 +264,96 @@ def test_member_sizes_are_capped_by_header_and_by_bytes_read(
         return infos
 
     monkeypatch.setattr(zipfile.ZipFile, "infolist", understated)
-    with pytest.raises(InvalidArchiveError, match="too large"):
-        import_case_archive(target, lying)
+    with pytest.raises(InvalidArchiveError):
+        import_case_archive(target, forged)
     assert target.listing().patients == ()
+    assert not list(target.root.glob(".importing-*"))
+
+
+def test_adopt_and_install_refuse_ids_that_are_already_taken(
+    source: Library, target: Library, tmp_path: Path
+) -> None:
+    case = build_case(source)
+    zip_path = tmp_path / "case.zip"
+    write_case_archive(source.case_dir(case.id), zip_path)
+    import_case_archive(target, zip_path)
+    patient = source.patient(case.patient_id).record
+
+    assert target.adopt_patient(patient).folder.name == "Alex Wang"
+    assert [p.name for p in target.root.iterdir()] == ["Alex Wang"]
+    staged = target.staging_dir()
+    with pytest.raises(CaseExistsError) as info:
+        target.install_case(staged, case)
+    assert info.value.details == {"case_id": case.id, "title": "implant 16"}
+    assert staged.exists()  # the caller owns the staging folder
+
+
+def test_remove_empty_patient_only_removes_an_empty_patient(
+    source: Library, target: Library, tmp_path: Path
+) -> None:
+    case = build_case(source)
+    empty = target.adopt_patient(source.patient(case.patient_id).record)
+    target.remove_empty_patient(empty.record.id)
+    assert list(target.root.iterdir()) == []
+
+    full = target.create_patient("Sam", None)
+    target.create_case(full.id, "procedure", "x")
+    target.remove_empty_patient(full.id)
+    assert (target.root / "Sam" / "patient.json").is_file()
+
+
+@pytest.mark.parametrize("policy", ["ask", "skip"])
+def test_a_case_installed_meanwhile_is_a_conflict_too(
+    policy: str,
+    source: Library,
+    target: Library,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = build_case(source)
+    zip_path = tmp_path / "case.zip"
+    write_case_archive(source.case_dir(case.id), zip_path)
+    # Another import lands between this one's check and its install.
+    monkeypatch.setattr(archive, "_find_case", lambda lib, case_id: None)
+    other = make_lib(tmp_path / "other")
+    import_case_archive(other, zip_path)
+    first = import_case_archive(target, zip_path)
+    assert first.status == "imported"
+
+    if policy == "ask":
+        with pytest.raises(CaseExistsError):
+            import_case_archive(target, zip_path)
+    else:
+        assert import_case_archive(target, zip_path, on_conflict="skip").status == "skipped"
+    assert len(target.listing().patients) == 1
+    assert len(target.patient(case.patient_id).cases) == 1
+    assert not list(target.root.glob(".importing-*"))
+
+
+def test_concurrent_imports_of_one_archive_keep_one_patient_and_case(
+    source: Library, target: Library, tmp_path: Path
+) -> None:
+    case = build_case(source)
+    zip_path = tmp_path / "case.zip"
+    write_case_archive(source.case_dir(case.id), zip_path)
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def run() -> None:
+        barrier.wait()
+        outcomes.append(import_case_archive(target, zip_path, on_conflict="skip").status)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sorted(outcomes) == ["imported", "skipped"]
+    listing = target.listing()
+    assert listing.problems == ()
+    assert len(listing.patients) == 1
+    assert len(listing.patients[0].cases) == 1
     assert not list(target.root.glob(".importing-*"))
 
 
