@@ -206,6 +206,30 @@ def test_truncated_file_is_corrupt() -> None:
         imageio.decode(data[:200])
 
 
+def test_capture_time_survives_in_the_header_of_a_truncated_photo() -> None:
+    data = _jpeg(Image.fromarray(_gradient(640, 480)), _exif())
+    truncated = data[: len(data) // 2]
+
+    with pytest.raises(CorruptImageError):
+        imageio.decode(truncated)
+    assert imageio.read_capture_time(truncated) == datetime(
+        2026, 10, 16, 14, 30, 12, tzinfo=timezone(timedelta(hours=8))
+    )
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"\xff\xd8\xff",
+        b"not an image",
+        _jpeg(Image.fromarray(_gradient()), _exif(taken=None)),
+    ],
+    ids=["marker-only", "not-an-image", "no-capture-time"],
+)
+def test_a_header_without_a_capture_time_reads_as_none(data: bytes) -> None:
+    assert imageio.read_capture_time(data) is None
+
+
 def test_oversized_image_is_rejected_before_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(imageio, "MAX_PIXELS", 1000)
 

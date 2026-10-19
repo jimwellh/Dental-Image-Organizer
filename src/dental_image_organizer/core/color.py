@@ -1,9 +1,14 @@
-"""Color matching to the reference (spec §4.5.2): monotone per-channel curves in CIE Lab."""
+"""Color matching in CIE Lab.
+
+Two methods share the Lab conversions: monotone per-channel curves that match a procedure photo
+to its reference (spec §4.5.2), and an affine Reinhard mean/spread transfer that unifies the
+cells of a composite (spec §4.7.3).
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import cv2
 import numpy as np
@@ -26,6 +31,14 @@ STABLE_SHARE = 0.01
 MAX_FIT_PIXELS = 250_000
 APPLY_CHUNK_ROWS = 512
 
+REINHARD_METHOD = "lab_reinhard_v1"
+REINHARD_STRENGTH = 0.8
+REINHARD_MEAN_LIMITS = (12.0, 8.0, 8.0)
+# Guards a near-zero source spread; the spec does not bound the gain.
+REINHARD_GAIN_RANGE = (0.67, 1.5)
+MIN_STATS_SHARE = 0.05
+MIN_SPREAD = 1e-6
+
 LabImage = npt.NDArray[np.float32]
 FloatArray = npt.NDArray[np.float64]
 BoolMask = npt.NDArray[np.bool_]
@@ -39,6 +52,10 @@ def to_lab(rgb: RGBImage) -> LabImage:
 def from_lab(lab: LabImage) -> RGBImage:
     rgb = cv2.cvtColor(lab.astype(np.float32), cv2.COLOR_LAB2RGB)
     return np.clip(np.rint(rgb * 255.0), 0, 255).astype(np.uint8)
+
+
+class LabTransform(Protocol):
+    def apply_lab(self, lab: npt.NDArray[np.floating[Any]]) -> npt.NDArray[np.float32]: ...
 
 
 @dataclass(frozen=True)
@@ -81,6 +98,31 @@ class LabCurves:
         return cls(cast(tuple[Curve, Curve, Curve], curves))
 
 
+@dataclass(frozen=True)
+class LabAffine:
+    gains: tuple[float, float, float]
+    offsets: tuple[float, float, float]
+
+    def apply_lab(self, lab: npt.NDArray[np.floating[Any]]) -> npt.NDArray[np.float32]:
+        gains = np.asarray(self.gains, dtype=np.float32)
+        offsets = np.asarray(self.offsets, dtype=np.float32)
+        return np.asarray(lab.astype(np.float32) * gains + offsets, dtype=np.float32)
+
+    def to_params(self) -> dict[str, dict[str, float]]:
+        return {
+            name: {"gain": gain, "offset": offset}
+            for name, gain, offset in zip(CHANNELS, self.gains, self.offsets, strict=True)
+        }
+
+    @classmethod
+    def from_params(cls, params: dict[str, dict[str, float]]) -> LabAffine:
+        gains = tuple(float(params[name]["gain"]) for name in CHANNELS)
+        offsets = tuple(float(params[name]["offset"]) for name in CHANNELS)
+        return cls(
+            cast(tuple[float, float, float], gains), cast(tuple[float, float, float], offsets)
+        )
+
+
 def fit_lab_curves(
     photo_rgb: RGBImage,
     reference_rgb: RGBImage,
@@ -116,15 +158,49 @@ def fit_lab_curves(
     return curves
 
 
-def apply_lab_curves(
-    rgb: RGBImage, curves: LabCurves, *, chunk_rows: int = APPLY_CHUNK_ROWS
+def apply_lab_transform(
+    rgb: RGBImage, transform: LabTransform, *, chunk_rows: int = APPLY_CHUNK_ROWS
 ) -> RGBImage:
     # Row chunks bound memory: a full 48 MP image in float32 Lab would need about 580 MB.
     out = np.empty_like(rgb)
     for y in range(0, rgb.shape[0], chunk_rows):
         lab = to_lab(rgb[y : y + chunk_rows])
-        out[y : y + chunk_rows] = from_lab(curves.apply_lab(lab))
+        out[y : y + chunk_rows] = from_lab(transform.apply_lab(lab))
     return out
+
+
+def fit_reinhard(
+    source_rgb: RGBImage, source_mask: BoolMask, target_rgb: RGBImage, target_mask: BoolMask
+) -> LabAffine:
+    """Per-channel mean/spread transfer of the source's colors onto the target's (spec §4.7.3)."""
+    # A near-empty mask gives unstable statistics, so both sides fall back to the whole frame
+    # together: whole-frame statistics against tooth and gingiva ones would shift the cell by
+    # the difference between the regions, not between the photos.
+    masked = min(source_mask.mean(), target_mask.mean()) >= MIN_STATS_SHARE
+    source = _lab_pixels(source_rgb, source_mask if masked else None)
+    target = _lab_pixels(target_rgb, target_mask if masked else None)
+    mu_s, mu_t = source.mean(axis=0), target.mean(axis=0)
+    sd_s, sd_t = source.std(axis=0), target.std(axis=0)
+    gains: list[float] = []
+    offsets: list[float] = []
+    for c in range(3):
+        k = float(np.clip(sd_t[c] / sd_s[c], *REINHARD_GAIN_RANGE)) if sd_s[c] > MIN_SPREAD else 1.0
+        limit = REINHARD_MEAN_LIMITS[c]
+        shift = float(np.clip(mu_t[c] - mu_s[c], -limit, limit))
+        # Blending the full transfer x' = (x - mu_s) * k + mu_s + shift with identity is affine.
+        gains.append(1.0 - REINHARD_STRENGTH + REINHARD_STRENGTH * k)
+        offsets.append(REINHARD_STRENGTH * (float(mu_s[c]) + shift - k * float(mu_s[c])))
+    return LabAffine(
+        cast(tuple[float, float, float], tuple(gains)),
+        cast(tuple[float, float, float], tuple(offsets)),
+    )
+
+
+def _lab_pixels(rgb: RGBImage, mask: BoolMask | None) -> FloatArray:
+    lab = to_lab(rgb)
+    if mask is None:
+        return lab.reshape(-1, 3).astype(np.float64)
+    return lab[mask].astype(np.float64)
 
 
 def _fit(

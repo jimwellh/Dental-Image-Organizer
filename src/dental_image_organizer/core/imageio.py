@@ -115,6 +115,20 @@ def decode(data: bytes) -> DecodedImage:
     return DecodedImage(rgb=rgb, metadata=metadata, format=fmt)
 
 
+def read_capture_time(data: bytes) -> datetime | None:
+    """The EXIF capture time from the header alone, or None when no header can be parsed.
+
+    A copy cut short keeps its header, so a photo whose pixels fail to decode can still be
+    ranked in shooting order.
+    """
+    try:
+        # Opening only parses the header; no pixel is decoded.
+        with Image.open(io.BytesIO(data)) as img:
+            return _read_metadata(img.getexif()).captured_at
+    except (Image.DecompressionBombError, OSError, SyntaxError, ValueError):
+        return None
+
+
 def resize_long_edge(
     rgb: RGBImage, long_edge: int, *, upscale: bool = False
 ) -> tuple[RGBImage, float]:

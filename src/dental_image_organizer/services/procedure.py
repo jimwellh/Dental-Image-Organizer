@@ -65,7 +65,7 @@ def output_size(reference_size: tuple[int, int], output_scale: float) -> tuple[i
 
 
 def render_edit(photo_rgb: RGBImage, edit: ProcedureEdit, size: tuple[int, int]) -> RGBImage:
-    return render(photo_rgb, edit.transform, size, curves=edit.curves)
+    return render(photo_rgb, edit.transform, size, color=edit.curves)
 
 
 def render_reference(reference_rgb: RGBImage, size: tuple[int, int]) -> RGBImage:

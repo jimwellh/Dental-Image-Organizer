@@ -3,8 +3,8 @@
 Automated alignment, color matching, and collage generation for clinical intraoral photos.
 It runs locally on the dentist's Mac.
 
-> **Status: early development.** The procedure pipeline is available as a command-line tool
-> (`dio process`); the app UI is not built yet. See the
+> **Status: early development.** The procedure and composite pipelines are available as
+> command-line tools (`dio process`, `dio composite`); the app UI is not built yet. See the
 > [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
 
 ## What it does
@@ -57,6 +57,15 @@ This installs the app with [uv](https://docs.astral.sh/uv/) and adds a
 **Dental Image Organizer** launcher to `~/Applications`. No Python installation is required, and
 the launcher costs nothing.
 
+## Third-party model
+
+The composite classifier uses embeddings from Meta's
+[DINOv2](https://github.com/facebookresearch/dinov2) ViT-S/14 (Apache-2.0), exported to ONNX by
+`scripts/export_dinov2_onnx.py`. The model is downloaded once, with your consent
+(`--download-model`), from this repository's GitHub Releases
+([`model-dinov2s-v1`](https://github.com/jimwellh/Dental-Image-Organizer/releases/tag/model-dinov2s-v1))
+and verified by SHA-256.
+
 ## Documentation
 
 - [Product requirements](doc/requirements.md)
@@ -86,11 +95,26 @@ uv run dio process IMG_0002.HEIC IMG_0003.HEIC --reference reference.HEIC \
   --out export --patient "Alex Wang" --title "implant 16"
 ```
 
+Compose one 9-photo set:
+
+```sh
+uv run dio composite IMG_*.HEIC --out export --patient "Alex Wang" --tag "full mouth"
+```
+
+`--learn` stores a checked run as classifier samples, and the first such run needs
+`--download-model` (about 24 MB, once, from this repository's GitHub Releases). To reset the
+classifier, delete the `classifier` folder in the app data directory (on macOS,
+`~/Library/Application Support/DentalImageOrganizer/classifier`).
+
 ### Golden photos (local only)
 
-Real, de-identified photos for tuning go in `local_fixtures/procedure/<case>/`: a
-`reference.<ext>` plus that case's other photos. The folder is gitignored. Run
-`uv run pytest tests/golden` to write per-photo metrics to `local_fixtures/reports/`.
+Real, de-identified photos for tuning go in `local_fixtures/`, which is gitignored:
+
+- `local_fixtures/procedure/<case>/`: a `reference.<ext>` plus that case's other photos.
+- `local_fixtures/composite/<set>/`: one session's photos, taken in row-major slot order. An
+  optional `order.txt` lists the real shooting order instead, one slot per line.
+
+Run `uv run pytest tests/golden` to write per-photo metrics to `local_fixtures/reports/`.
 
 ## Disclaimer
 

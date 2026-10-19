@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from dental_image_organizer.core import transform as tf
-from dental_image_organizer.core.color import LabCurves, apply_lab_curves
+from dental_image_organizer.core.color import LabTransform, apply_lab_transform
 from dental_image_organizer.core.imageio import RGBImage
 from dental_image_organizer.core.masks import BoolMask
 
@@ -28,7 +28,7 @@ def render(
     transform: tf.Matrix,
     output_size: tuple[int, int],
     *,
-    curves: LabCurves | None = None,
+    color: LabTransform | None = None,
     interpolation: int = cv2.INTER_LANCZOS4,
     border_mode: int = cv2.BORDER_CONSTANT,
 ) -> RGBImage:
@@ -53,12 +53,12 @@ def render(
             borderValue=(0, 0, 0),
         ),
     )
-    if curves is None:
+    if color is None:
         return warped
-    graded = apply_lab_curves(warped, curves)
+    graded = apply_lab_transform(warped, color)
     if border_mode == cv2.BORDER_CONSTANT:
-        # Curves keep their end offsets below the fitted range, so they would tint the black
-        # fill outside the photo; that fill is not photo content and stays black.
+        # Color maps keep offsets (curves past their fitted range, affine maps everywhere), so
+        # they would tint the black fill outside the photo; that fill is not photo content.
         covered = coverage_mask((image.shape[1], image.shape[0]), transform, output_size)
         graded[~covered] = 0
     return graded

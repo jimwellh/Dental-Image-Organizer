@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 import cv2
 import numpy as np
 
 from dental_image_organizer.core.imageio import MAX_PIXELS, RGBImage
+from dental_image_organizer.core.slots import SLOTS, Slot
 
 # The JPEG width limit alone left the height unbounded: nine 2x-scaled 12 MP frames reached
 # ~357 MP. The cap is the decoder's own limit (200 MP, 600 MB as RGB uint8) so the app can read
@@ -42,6 +43,35 @@ def render_sequence(
     for img in resized:
         canvas[:, x : x + img.shape[1]] = img
         x += img.shape[1] + gap_px
+    return canvas
+
+
+def render_composite(
+    cells: Mapping[Slot, RGBImage],
+    cell_size: tuple[int, int],
+    *,
+    gap_px: int = 0,
+    gap_color: tuple[int, int, int] = (0, 0, 0),
+) -> RGBImage:
+    """Place cells (width, height) in the row-major 3 x 3 grid; missing slots keep `gap_color`."""
+    cell_w, cell_h = cell_size
+    columns = 3
+    rows = len(SLOTS) // columns
+    canvas = np.empty(
+        (rows * cell_h + (rows - 1) * gap_px, columns * cell_w + (columns - 1) * gap_px, 3),
+        dtype=np.uint8,
+    )
+    canvas[:] = gap_color
+    for index, slot in enumerate(SLOTS):
+        cell = cells.get(slot)
+        if cell is None:
+            continue
+        # A silently misplaced or clipped cell would ship a wrong composite, so fail fast.
+        if _size(cell) != cell_size:
+            raise ValueError(f"Cell {slot!r} is {_size(cell)}, expected {cell_size}.")
+        row, col = divmod(index, columns)
+        y, x = row * (cell_h + gap_px), col * (cell_w + gap_px)
+        canvas[y : y + cell_h, x : x + cell_w] = cell
     return canvas
 
 

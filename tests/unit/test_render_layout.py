@@ -68,7 +68,7 @@ def test_color_curves_leave_the_uncovered_border_black() -> None:
         )
     )
 
-    out = render(gray, shift, (100, 100), curves=curves)
+    out = render(gray, shift, (100, 100), color=curves)
 
     assert (out[:, :50] == 0).all()
     assert np.abs(out[:, 60:].astype(int) - 120).min() > 5

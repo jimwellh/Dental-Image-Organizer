@@ -222,7 +222,7 @@ A **Downloads-folder watcher** (auto-import of new AirDrop arrivals) is a post-M
 
 | Concern | Choice |
 |---|---|
-| Runtime | Python **3.12** (`requires-python = ">=3.12"`), environment and Python provisioning by `uv` |
+| Runtime | Python **3.12** (`requires-python = ">=3.12,<3.15"`), environment and Python provisioning by `uv`. The cap keeps `uv` from picking a Python that `onnxruntime` ships no wheel for (1.31.0 has none for 3.15); raise it when one ships. |
 | Web | FastAPI + Uvicorn, Pydantic v2 |
 | CLI | Typer |
 | Logging | structlog: JSON lines to a rotating file (5 × 5 MB) and human-readable console output; levels DEBUG / INFO / WARNING / ERROR |
@@ -474,6 +474,9 @@ After alignment, pixel correspondences exist:
   - The CLS token alone discards where things are in the frame. The grid keeps the coarse
     layout, such as which side of the frame the anterior teeth are on.
 - Each photo is embedded twice: as `x` and as its horizontal mirror `x̄`.
+  - `x̄` mirrors the photo left to right before the portrait rotation. For a portrait photo it is
+    therefore `x` flipped top to bottom; flipping the rotated input left to right would mirror the
+    view top to bottom and break the side head's antisymmetry.
 - Inference: onnxruntime CPU EP in batches of 18 (nine photos plus their mirrors). Apple Silicon
   CoreML EP is an optional optimization and is off by default, because it cannot be tested on the
   Windows development host.
@@ -501,9 +504,10 @@ same original-minus-mirror feature; this is an independent re-implementation.
   - `occlusion_front`;
   - `lower_buccal` = {`lower_right`, `lower_left`};
   - `lower_occlusal`.
-- **Group head.** scikit-learn `LogisticRegression` (multinomial, `C = 1.0`,
+- **Group head.** scikit-learn `LogisticRegression` (multinomial, `C = 10.0`,
   `class_weight = "balanced"`) on the mirror-symmetric feature `s = (g(x) + g(x̄)) / 2`.
-  Mirroring a photo never changes its group.
+  Mirroring a photo never changes its group. Block-normalized embeddings are short vectors, and
+  at C = 1.0 every probability stayed below 0.5 on the exported model.
 - **Side head.** `LogisticRegression(fit_intercept=False)` on the mirror-antisymmetric feature
   `a = g(x) − g(x̄)`, with labels right / left.
   - Without an intercept, mirroring a photo exactly negates its score.
@@ -521,6 +525,8 @@ same original-minus-mirror feature; this is an independent re-implementation.
     `source` (`export | teach`), timestamps);
   - model → `classifier/model.json` (both heads' coefficients and intercepts, class order,
     embedding model hash).
+  - Samples also carry a photo id (the SHA-256 of the photo file), and confirming the same photo
+    again replaces its earlier label.
 - Samples carry the embedding-model hash. If the model changes, old samples are ignored and the
   user is told to re-confirm a few cases.
 - Retraining runs in the background after each composite export and each confirmed teaching set;
@@ -675,7 +681,7 @@ never overwritten silently: the export screen offers "Replace previous export" o
 | `dio serve [--port N] [--no-browser] [--detach]` | Start the local server (§4.3) |
 | `dio install-launcher [--uv-path PATH]` / `dio uninstall-launcher` | macOS only: create or remove `~/Applications/Dental Image Organizer.app` (§7.3), and record the absolute `uv` and `dio` paths for in-app updates. Other OSes print "not supported". |
 | `dio process --reference REF --out DIR PHOTOS...` | Headless Feature 1. This is the extension point for future adapters. |
-| `dio composite --out DIR PHOTOS...` | Headless Feature 2 |
+| `dio composite PHOTOS... --out DIR --patient NAME --tag TAG [--order SLOTS] [--baseline SLOT] [--flip SLOT=FLIP]... [--assign FILE=SLOT\|tray]... [--learn] [--download-model]` | Headless Feature 2; `--learn` stores the run as confirmed samples (§3.3 step 7) |
 | `dio export-case CASE_DIR ZIP` / `dio import-case ZIP` | Case archive round trip |
 | `dio --version` | Print the version |
 

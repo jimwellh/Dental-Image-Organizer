@@ -6,12 +6,17 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "jimwellh" }]
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.15"
 dependencies = [
+  "httpx>=0.28",
   "numpy>=2.0",
+  "onnxruntime>=1.24",
   "opencv-python-headless>=4.10",
   "pillow>=11.0",
   "pi-heif>=1.0",
+  "platformdirs>=4.3",
+  "scikit-learn>=1.6",
+  "scipy>=1.14",
   "structlog>=25.1",
   "typer>=0.15",
 ]
@@ -25,6 +30,7 @@ dev = [
   "hypothesis>=6.120",
   "import-linter>=2.1",
   "mypy>=1.15",
+  "onnx>=1.17",
   "pillow-heif>=0.21",
   "pytest>=8.3",
   "ruff>=0.9",
@@ -52,7 +58,7 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["pi_heif", "pi_heif.*"]
+module = ["pi_heif", "pi_heif.*", "onnxruntime", "onnxruntime.*", "sklearn", "sklearn.*", "scipy", "scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -68,4 +74,19 @@ root_package = "dental_image_organizer"
 name = "core is pure: no services or CLI imports"
 type = "forbidden"
 source_modules = ["dental_image_organizer.core"]
-forbidden_modules = ["dental_image_organizer.services", "dental_image_organizer.cli"]
+forbidden_modules = [
+  "dental_image_organizer.ml",
+  "dental_image_organizer.services",
+  "dental_image_organizer.cli",
+  "dental_image_organizer.paths",
+]
+
+[[tool.importlinter.contracts]]
+name = "ml uses core only: no services, CLI, or app paths"
+type = "forbidden"
+source_modules = ["dental_image_organizer.ml"]
+forbidden_modules = [
+  "dental_image_organizer.services",
+  "dental_image_organizer.cli",
+  "dental_image_organizer.paths",
+]
