@@ -29,6 +29,10 @@ class JobError:
     message: str
 
 
+_CANCELLED = JobError("cancelled", "The app was closing.")
+_INTERNAL = JobError("internal_error", _INTERNAL_MESSAGE)
+
+
 @dataclass(frozen=True)
 class JobSnapshot:
     id: str
@@ -74,24 +78,34 @@ class JobManager:
         # Keys with a job handed to the executor; later jobs of the key wait in `_waiting`.
         self._busy: set[str] = set()
         self._waiting: dict[str, deque[str]] = {}
+        self._closing = False
 
     def submit(
         self, kind: str, fn: JobFn, *, key: str | None = None, total: int = 0
     ) -> JobSnapshot:
         job_id = new_id()
         snapshot = JobSnapshot(id=job_id, kind=kind, key=key, state="queued", total=total)
+        start_now = False
         with self._lock:
             self._jobs[job_id] = snapshot
-            self._fns[job_id] = fn
-            start_now = key is None or key not in self._busy
-            if key is None:
-                pass
-            elif start_now:
-                self._busy.add(key)
+            if self._closing:
+                # A shut-down executor would raise; a finished job keeps `wait` and `watch` honest.
+                cancelled = self._fail_locked(job_id, _CANCELLED)
             else:
-                self._waiting.setdefault(key, deque()).append(job_id)
+                cancelled = None
+                self._fns[job_id] = fn
+                start_now = key is None or key not in self._busy
+                if key is None:
+                    pass
+                elif start_now:
+                    self._busy.add(key)
+                else:
+                    self._waiting.setdefault(key, deque()).append(job_id)
+        if cancelled is not None:
+            self._notify_finished(cancelled)
+            return cancelled
         if start_now:
-            self._executor.submit(self._run, job_id)
+            self._dispatch(job_id)
         return snapshot
 
     def get(self, job_id: str) -> JobSnapshot:
@@ -130,23 +144,15 @@ class JobManager:
             await asyncio.sleep(interval)
 
     def cancel_queued(self) -> int:
+        # Jobs sitting in the executor's own queue are `queued` too and would start (and block
+        # `shutdown(wait=True)`), so every queued snapshot fails, and closing stops later handoffs.
         cancelled: list[JobSnapshot] = []
         with self._lock:
-            for queue in self._waiting.values():
-                while queue:
-                    job_id = queue.popleft()
-                    self._fns.pop(job_id, None)
-                    snapshot = self._jobs[job_id]
-                    self._jobs[job_id] = replace(
-                        snapshot,
-                        state="failed",
-                        error=JobError("cancelled", "The app was closing."),
-                        version=snapshot.version + 1,
-                    )
-                    self._remember_finished(job_id)
-                    cancelled.append(self._jobs[job_id])
+            self._closing = True
+            for job_id, snapshot in list(self._jobs.items()):
+                if snapshot.state == "queued":
+                    cancelled.append(self._fail_locked(job_id, _CANCELLED))
             self._waiting.clear()
-            self._changed.notify_all()
         for snapshot in cancelled:
             self._notify_finished(snapshot)
         return len(cancelled)
@@ -169,11 +175,28 @@ class JobManager:
         while len(self._finished) > self._keep_finished:
             self._jobs.pop(self._finished.popleft(), None)
 
+    def _fail_locked(self, job_id: str, error: JobError) -> JobSnapshot:
+        # Caller holds the lock.
+        self._fns.pop(job_id, None)
+        snapshot = self._jobs[job_id]
+        failed = replace(snapshot, state="failed", error=error, version=snapshot.version + 1)
+        self._jobs[job_id] = failed
+        self._remember_finished(job_id)
+        self._changed.notify_all()
+        return failed
+
     def _notify_finished(self, snapshot: JobSnapshot) -> None:
         if self._on_finish is None:
             return
         try:
             self._on_finish(snapshot)
+        except OSError as exc:
+            # The message of an OSError carries its path.
+            log.warning(
+                "job_on_finish_failed",
+                job_id=snapshot.id,
+                error=exc.strerror or type(exc).__name__,
+            )
         except Exception:
             log.exception("job_on_finish_failed", job_id=snapshot.id)
 
@@ -183,16 +206,34 @@ class JobManager:
 
         return report
 
+    def _dispatch(self, job_id: str) -> None:
+        try:
+            self._executor.submit(self._run, job_id)
+        except Exception:
+            # A shut-down executor refuses work; without this the job and its key stay stuck.
+            log.exception("job_dispatch_failed", job_id=job_id)
+            with self._lock:
+                error = _CANCELLED if self._closing else _INTERNAL
+                self._fns.pop(job_id, None)
+            self._finish(job_id, {"state": "failed", "error": error})
+
     def _run(self, job_id: str) -> None:
         with self._lock:
-            fn = self._fns.pop(job_id)
-            kind = self._jobs[job_id].kind
-        self._update(job_id, state="running")
+            fn = self._fns.pop(job_id, None)
+            if fn is None:
+                # Cancelled while it waited in the executor's queue.
+                return
+            snapshot = self._jobs[job_id]
+            kind = snapshot.kind
+            # Claiming the fn and marking it running is one step, so a cancel cannot slip between.
+            self._jobs[job_id] = replace(snapshot, state="running", version=snapshot.version + 1)
+            self._changed.notify_all()
         with bound_contextvars(job_id=job_id, job_kind=kind):
-            outcome: dict[str, Any] = {"state": "done"}
+            # Pre-set so that a BaseException still publishes an end for `wait` and `watch`.
+            outcome: dict[str, Any] = {"state": "failed", "error": _INTERNAL}
             try:
                 result = fn(self._progress(job_id))
-                outcome["result"] = dict(result) if result is not None else None
+                outcome = {"state": "done", "result": dict(result) if result is not None else None}
             except DioError as exc:
                 # The cause may be an OSError holding a patient name, so only the code is logged.
                 log.warning("job_failed", code=exc.code)
@@ -203,11 +244,11 @@ class JobManager:
                 outcome = {"state": "failed", "error": JobError("io_error", reason)}
             except Exception:
                 log.exception("job_failed")
-                outcome = {
-                    "state": "failed",
-                    "error": JobError("internal_error", _INTERNAL_MESSAGE),
-                }
-            self._finish(job_id, outcome)
+            except BaseException as exc:
+                log.error("job_failed", error=type(exc).__name__)
+                raise
+            finally:
+                self._finish(job_id, outcome)
 
     def _finish(self, job_id: str, outcome: dict[str, Any]) -> None:
         with self._lock:
@@ -221,7 +262,7 @@ class JobManager:
             self._remember_finished(job_id)
             if final.key is not None:
                 queue = self._waiting.get(final.key)
-                if queue:
+                if queue and not self._closing:
                     next_id = queue.popleft()
                 else:
                     self._waiting.pop(final.key, None)
@@ -229,4 +270,4 @@ class JobManager:
             self._changed.notify_all()
         # Handing over instead of blocking keeps a worker from idling for its key's turn.
         if next_id is not None:
-            self._executor.submit(self._run, next_id)
+            self._dispatch(next_id)

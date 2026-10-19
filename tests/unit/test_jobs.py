@@ -184,7 +184,7 @@ def test_watch_yields_every_state_until_finished(jobs: JobManager) -> None:
                 release.set()
         return seen
 
-    seen = asyncio.run(collect())
+    seen = asyncio.run(asyncio.wait_for(collect(), timeout=10))
 
     versions = [s.version for s in seen]
     assert versions == sorted(set(versions))
@@ -234,3 +234,86 @@ def test_cancel_queued_fails_waiting_jobs(jobs: JobManager) -> None:
     assert snap.error == JobError("cancelled", "The app was closing.")
     release.set()
     assert jobs.wait(a.id, TIMEOUT).state == "done"
+
+
+def test_cancel_queued_also_fails_jobs_waiting_in_the_executor() -> None:
+    pool = ThreadPoolExecutor(max_workers=2)
+    jobs = JobManager(pool)
+    release = threading.Barrier(3, timeout=TIMEOUT)
+    ran: list[str] = []
+
+    def blocked(progress: JobProgress) -> None:
+        release.wait()
+
+    def third(progress: JobProgress) -> None:
+        ran.append("c3")
+
+    a = jobs.submit("demo", blocked, key="c1")
+    b = jobs.submit("demo", blocked, key="c2")
+    c = jobs.submit("demo", third, key="c3")
+
+    assert jobs.cancel_queued() == 1
+    assert jobs.get(c.id).error == JobError("cancelled", "The app was closing.")
+    release.wait()
+    pool.shutdown(wait=True)
+
+    assert ran == []
+    assert jobs.get(a.id).state == jobs.get(b.id).state == "done"
+    assert jobs.get(c.id).state == "failed"
+
+
+def test_submitting_after_close_fails_the_job_at_once(jobs: JobManager) -> None:
+    jobs.cancel_queued()
+
+    snap = jobs.submit("demo", lambda p: None, key="k")
+
+    assert snap.state == "failed"
+    assert snap.error == JobError("cancelled", "The app was closing.")
+    assert not jobs.active("k")
+    assert jobs.wait(snap.id, 0.5).state == "failed"
+
+
+def test_a_shut_down_executor_fails_the_job_and_frees_its_key() -> None:
+    pool = ThreadPoolExecutor(max_workers=1)
+    jobs = JobManager(pool)
+    pool.shutdown(wait=True)
+
+    snap = jobs.submit("demo", lambda p: None, key="k")
+
+    final = jobs.wait(snap.id, 0.5)
+    assert final.state == "failed"
+    assert final.error == JobError(
+        "internal_error", "An unexpected error occurred; see the log file."
+    )
+    assert not jobs.active("k")
+
+
+def test_a_base_exception_still_ends_the_job_and_frees_the_key(
+    executor: ThreadPoolExecutor,
+) -> None:
+    jobs = JobManager(executor)
+
+    def fn(progress: JobProgress) -> None:
+        raise KeyboardInterrupt
+
+    first = jobs.submit("demo", fn, key="k")
+    snap = jobs.wait(first.id, TIMEOUT)
+    second = jobs.submit("demo", lambda p: {"ok": 1}, key="k")
+
+    assert snap.state == "failed"
+    assert snap.error is not None and snap.error.code == "internal_error"
+    assert jobs.wait(second.id, TIMEOUT).state == "done"
+
+
+def test_a_failing_on_finish_hook_never_logs_its_path(executor: ThreadPoolExecutor) -> None:
+    def hook(snapshot: JobSnapshot) -> None:
+        raise FileNotFoundError(2, "No such file", "/lib/Alex Wang/x")
+
+    jobs = JobManager(executor, on_finish=hook)
+
+    with capture_logs() as logs:
+        snap = jobs.wait(jobs.submit("demo", lambda p: None).id, TIMEOUT)
+
+    assert snap.state == "done"
+    assert logs and all("Alex Wang" not in repr(e) for e in logs)
+    assert all("exc_info" not in e for e in logs)
