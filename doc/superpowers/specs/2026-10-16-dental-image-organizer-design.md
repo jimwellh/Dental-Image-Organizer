@@ -878,7 +878,7 @@ A FastAPI exception handler maps each error to an HTTP status and returns
 and return 500 with a generic message.
 
 **Batch isolation.** One bad photo never aborts a batch. The photo is recorded with
-`status = "failed"` and a message, and the job reports partial success.
+`state = "failed"` and an `error` message, and the job reports partial success.
 
 **Alignment is not an exception.** Low confidence yields `needs_review`, never an exception.
 
