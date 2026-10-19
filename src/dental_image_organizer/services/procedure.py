@@ -22,8 +22,9 @@ from dental_image_organizer.core.imageio import (
 )
 from dental_image_organizer.core.render import coverage_mask, render
 from dental_image_organizer.errors import OutputTooLargeError
-
-OUTPUT_SCALES = (1.0, 1.5, 2.0)
+from dental_image_organizer.storage.schema import (
+    OUTPUT_SCALES as OUTPUT_SCALES,
+)  # re-exported for cli
 
 
 @dataclass(frozen=True)
