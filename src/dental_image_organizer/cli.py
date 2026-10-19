@@ -2,15 +2,19 @@
 
 from collections import Counter
 from collections.abc import Iterable, Sequence
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from dental_image_organizer import __version__
+from dental_image_organizer.config import SettingsStore
 from dental_image_organizer.core.slots import DEFAULT_FLIPS, FLIPS, SLOTS, Flip, Slot, parse_slot
-from dental_image_organizer.errors import DioError
+from dental_image_organizer.errors import CaseExistsError, DioError
+from dental_image_organizer.instance import InstanceLock
 from dental_image_organizer.log import configure_logging
+from dental_image_organizer.paths import app_dirs
 from dental_image_organizer.services.composite import DEFAULT_BASELINE
 from dental_image_organizer.services.headless import PhotoOutcome, ProcedureReport, run_procedure
 from dental_image_organizer.services.headless_composite import (
@@ -20,6 +24,8 @@ from dental_image_organizer.services.headless_composite import (
     run_composite,
 )
 from dental_image_organizer.services.procedure import OUTPUT_SCALES
+from dental_image_organizer.storage.archive import import_case_archive, write_case_archive
+from dental_image_organizer.storage.library import CASE_FILE, PATIENT_FILE, CaseLocks, Library
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -275,3 +281,79 @@ def _print_skips(outcomes: Iterable[PhotoOutcome]) -> None:
         ]
         total = sum(skipped.values())
         typer.echo(f"Skipped {total} file{'s' if total > 1 else ''}: {', '.join(parts)}")
+
+
+class _OnConflict(StrEnum):
+    skip = "skip"
+    copy = "copy"
+
+
+@app.command("export-case")
+def export_case(
+    case_dir: Annotated[
+        Path, typer.Argument(help="A case folder of the library.", file_okay=False)
+    ],
+    zip_path: Annotated[Path, typer.Argument(metavar="ZIP", help="The archive to write.")],
+) -> None:
+    """Write one case, with its patient record and originals, to a zip archive."""
+    configure_logging("WARNING")
+    folder = case_dir.resolve()
+    if not (folder / CASE_FILE).is_file() or not (folder.parent / PATIENT_FILE).is_file():
+        typer.echo(f"error: {case_dir} is not a case folder.", err=True)
+        raise typer.Exit(1)
+    if zip_path.exists():
+        typer.echo(f"error: {zip_path} already exists.", err=True)
+        raise typer.Exit(1)
+    try:
+        write_case_archive(folder, zip_path)
+    except (DioError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Wrote {zip_path}")
+
+
+@app.command("import-case")
+def import_case(
+    zip_path: Annotated[
+        Path, typer.Argument(metavar="ZIP", help="A case archive.", exists=True, dir_okay=False)
+    ],
+    on_conflict: Annotated[
+        _OnConflict | None,
+        typer.Option(help="What to do when the case is already in the library."),
+    ] = None,
+) -> None:
+    """Add a case archive to the library."""
+    configure_logging("WARNING")
+    dirs = app_dirs()
+    lock = InstanceLock(dirs.instance_lock)
+    # The lock guards the library (spec §4.3): a running server would not see this import.
+    if not lock.try_acquire():
+        typer.echo(
+            "error: Dental Image Organizer is running; import the case from the app, "
+            "or quit it first.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        library = Library(SettingsStore(dirs.settings_file).get().library_root, CaseLocks())
+        library.clean_staging()
+        outcome = import_case_archive(
+            library, zip_path, on_conflict=on_conflict.value if on_conflict else "ask"
+        )
+    except CaseExistsError as exc:
+        title = exc.details.get("title", "")
+        typer.echo(
+            f"error: This case is already in the library: {title}. "
+            "Rerun with --on-conflict skip or --on-conflict copy.",
+            err=True,
+        )
+        raise typer.Exit(1) from exc
+    except (DioError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        lock.release()
+    if outcome.status == "skipped":
+        typer.echo(f'Skipped "{outcome.title}": it is already in the library.')
+    else:
+        typer.echo(f'Imported "{outcome.title}"')

@@ -58,6 +58,14 @@ def patient_export_zip_name(patient: str, generated_on: date) -> str:
     return f"{p}{suffix}"
 
 
+def case_export_zip_name(patient: str, title: str, generated_on: date) -> str:
+    return _join(patient, title, f"_Export_{generated_on:%Y%m%d}.zip")
+
+
+def case_archive_name(patient: str, title: str, created_on: date) -> str:
+    return _join(patient, title, f"_Archive_{created_on:%Y%m%d}.zip")
+
+
 def unique_name(name: str, taken: Iterable[str]) -> str:
     """Return `name`, or `name` with `_2`, `_3`, ... before the extension if it is taken.
 

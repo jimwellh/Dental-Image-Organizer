@@ -106,6 +106,14 @@ uv run dio composite IMG_*.HEIC --out export --patient "Alex Wang" --tag "full m
 classifier, delete the `classifier` folder in the app data directory (on macOS,
 `~/Library/Application Support/DentalImageOrganizer/classifier`).
 
+Move one case between libraries as a zip archive (the library root comes from the app's
+settings; importing refuses while the app is running):
+
+```sh
+uv run dio export-case "~/DentalImageOrganizer/Alex Wang/20261016 implant 16" case.zip
+uv run dio import-case case.zip [--on-conflict skip|copy]
+```
+
 ### Golden photos (local only)
 
 Real, de-identified photos for tuning go in `local_fixtures/`, which is gitignored:

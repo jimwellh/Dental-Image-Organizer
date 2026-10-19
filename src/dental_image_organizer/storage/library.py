@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import threading
 import unicodedata
 from collections.abc import Callable, Iterator
@@ -20,6 +21,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import structlog
 
 from dental_image_organizer.core.naming import sanitize_component
 from dental_image_organizer.errors import (
@@ -49,6 +52,9 @@ CASE_FILE = "case.json"
 ORIGINALS_DIR = "originals"
 EXPORT_DIR = "export"
 TRASH_DIR = ".trash"
+STAGING_PREFIX = ".importing-"
+
+log = structlog.get_logger()
 
 _DATE_PREFIX = re.compile(r"^\d{8}(?= )")
 _Sig = tuple[int, int]
@@ -360,6 +366,16 @@ class Library:
                     self._write(self._root / target / PATIENT_FILE, record, "patient")
                     return record
 
+    def adopt_patient(self, record: PatientRecord) -> PatientEntry:
+        """Create the folder for a patient that keeps the id and dates of an imported record."""
+        display = unicodedata.normalize("NFC", record.name).strip()
+        base = folder_name(display)
+        with self._io:
+            folder = self._root / self._unique(self._root, base)
+            self._write(folder / PATIENT_FILE, record, "patient")
+            self._patient_dirs[record.id] = folder
+            return PatientEntry(record, folder, ())
+
     # -- cases ---------------------------------------------------------------------------
 
     def create_case(
@@ -392,6 +408,55 @@ class Library:
                 composite=composite,
             )
             self._write(folder / CASE_FILE, record, "case")
+            return record
+
+    def staging_dir(self) -> Path:
+        """A fresh folder inside the root, so moving a finished case in is a rename."""
+        folder = self._root / f"{STAGING_PREFIX}{new_id()}"
+        try:
+            folder.mkdir(parents=True)
+        except OSError as exc:
+            raise StorageError(f"Creating the folder failed: {_reason(exc)}") from exc
+        return folder
+
+    def clean_staging(self) -> None:
+        """Remove folders an interrupted import left behind. Call it only while holding the
+        instance lock: another process's import is otherwise still using its folder."""
+        with self._io:
+            try:
+                leftovers = [
+                    Path(e.path)
+                    for e in os.scandir(self._root)
+                    if e.name.startswith(STAGING_PREFIX) and e.is_dir(follow_symlinks=False)
+                ]
+            except _ABSENT:
+                return
+            except OSError as exc:
+                log.warning("staging_scan_failed", reason=_reason(exc))
+                return
+            for folder in leftovers:
+                try:
+                    shutil.rmtree(folder)
+                except OSError as exc:
+                    # Housekeeping only: a locked leftover must not block startup.
+                    log.warning("staging_remove_failed", reason=_reason(exc))
+
+    def install_case(self, staged: Path, record: CaseRecord) -> CaseRecord:
+        """Move a finished case folder (case.json and originals/) under its patient."""
+        base = (
+            f"{record.created_at:%Y%m%d} {folder_name(unicodedata.normalize('NFC', record.title))}"
+        )
+        with self._locks.hold(record.id), self._io:
+            pdir = self._patient_dir(record.patient_id)
+            folder = pdir / self._unique(pdir, base)
+            try:
+                os.replace(staged, folder)
+            except OSError as exc:
+                raise StorageError(
+                    f"Moving the case into the library failed: {_reason(exc)}"
+                ) from exc
+            self._remember(folder / CASE_FILE, record)
+            self._case_dirs[record.id] = folder
             return record
 
     def case_dir(self, case_id: str) -> Path:
