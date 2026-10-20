@@ -46,6 +46,7 @@ _SEPARATORS = re.compile(r"[/\\]")
 _DROPPED_CATEGORIES = frozenset({"Cc", "Cs"})
 TOO_LARGE_MESSAGE = "Files over 200 MB are not accepted."
 DUPLICATE_MESSAGE = "This photo is already in the case."
+VANISHED_MESSAGE = "The photo's file was removed while it was being added; drop it again."
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,12 @@ def add_photos(
                 else:
                     known.add(outcome.sha256)
                     photo = _pending(outcome, role, now)
+                    # Checked under the case lock, where deleters decide too: staging ran before
+                    # it, so removing a photo with the same bytes may have taken the file since.
+                    if not (directory / outcome.file_name).exists():
+                        log.warning("staged_original_vanished", photo_id=photo.id)
+                        failed = {"state": "failed", "error": VANISHED_MESSAGE}
+                        photo = photo.model_copy(update=failed)
                     photos.append(photo)
                     added.append(photo.id)
             return case.model_copy(update={"photos": photos})

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import unicodedata
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,8 @@ import pytest
 from dental_image_organizer.services import intake
 from dental_image_organizer.services.context import AppContext
 from dental_image_organizer.services.intake import Skipped, add_photos, display_name
+from dental_image_organizer.storage.library import Library
+from dental_image_organizer.storage.schema import CaseRecord
 from support.app import jpeg, upload
 
 VIDEO = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
@@ -20,6 +23,7 @@ SIDECAR = b'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"/>'
 RAW = b"II*\x00" + bytes(60)
 TEXT = b"Notes from the visit."
 DUPLICATE = "This photo is already in the case."
+VANISHED = "The photo's file was removed while it was being added; drop it again."
 
 
 def _case(ctx: AppContext) -> str:
@@ -123,6 +127,45 @@ def test_dropping_the_same_photo_again_is_reported_as_duplicate(ctx: AppContext)
     assert [p.source_name for p in case.photos] == ["A.jpg", "B.jpg", "C.jpg"]
     assert len({p.sha256 for p in case.photos}) == 3
     assert len(_originals(ctx, case_id)) == 3
+
+
+def test_a_photo_whose_staged_file_vanished_is_recorded_failed(
+    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case_id = _case(ctx)
+    a, b, c = _photo(30), _photo(120), _photo(220)
+    sha = hashlib.sha256(b).hexdigest()
+    lost = ctx.library().case_dir(case_id) / "originals" / f"{sha[:16]}.jpg"
+    real_update_case = Library.update_case
+
+    def deleting_first(
+        self: Library, case_id: str, change: Callable[[CaseRecord], CaseRecord]
+    ) -> CaseRecord:
+        # A concurrent delete of a photo with the same bytes, between staging and the change.
+        lost.unlink()
+        return real_update_case(self, case_id, change)
+
+    monkeypatch.setattr(Library, "update_case", deleting_first)
+
+    added, skipped = add_photos(
+        ctx,
+        case_id,
+        [upload("A.jpg", a), upload("B.jpg", b), upload("C.jpg", c)],
+        role="photo",
+    )
+
+    case = ctx.library().read_case(case_id)
+    assert skipped == []
+    assert added == [p.id for p in case.photos]
+    assert [(p.source_name, p.state, p.error) for p in case.photos] == [
+        ("A.jpg", "pending", None),
+        ("B.jpg", "failed", VANISHED),
+        ("C.jpg", "pending", None),
+    ]
+    vanished = case.photos[1]
+    assert (vanished.sha256, vanished.file) == (sha, f"originals/{lost.name}")
+    assert vanished.captured_at is not None
+    assert vanished.captured_at_source == "file_mtime"
 
 
 def test_files_over_the_limit_are_skipped(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
