@@ -41,11 +41,18 @@ def compute_edit(photo_rgb: RGBImage, reference: PreparedReference) -> Procedure
     # content would shift them arbitrarily, so it keeps the photo's own colors.
     if aligned.estimated:
         working, _ = resize_long_edge(photo_rgb, WORKING_LONG_EDGE)
-        size = (reference.working.shape[1], reference.working.shape[0])
-        warped = render(working, aligned.transform, size, interpolation=cv2.INTER_LINEAR)
-        valid = coverage_mask((working.shape[1], working.shape[0]), aligned.transform, size)
-        curves = fit_lab_curves(warped, reference.working, valid, reference.working_teeth)
+        curves = fit_colors(working, aligned.transform, reference)
     return ProcedureEdit(transform=aligned.transform, curves=curves, align=aligned)
+
+
+def fit_colors(
+    photo_working: RGBImage, transform: tf.Matrix, reference: PreparedReference
+) -> LabCurves:
+    """Fit the color curves of a photo placed by `transform`, at working resolution (§4.5.2)."""
+    size = (reference.working.shape[1], reference.working.shape[0])
+    warped = render(photo_working, transform, size, interpolation=cv2.INTER_LINEAR)
+    valid = coverage_mask((photo_working.shape[1], photo_working.shape[0]), transform, size)
+    return fit_lab_curves(warped, reference.working, valid, reference.working_teeth)
 
 
 def output_size(reference_size: tuple[int, int], output_scale: float) -> tuple[int, int]:

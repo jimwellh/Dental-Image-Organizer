@@ -168,13 +168,7 @@ def add_photos(
                     skipped.append(Skipped(outcome.name, "duplicate", DUPLICATE_MESSAGE))
                 else:
                     known.add(outcome.sha256)
-                    photo = _pending(outcome, role, now)
-                    # Checked under the case lock, where deleters decide too: staging ran before
-                    # it, so removing a photo with the same bytes may have taken the file since.
-                    if not (directory / outcome.file_name).exists():
-                        log.warning("staged_original_vanished", photo_id=photo.id)
-                        failed = {"state": "failed", "error": VANISHED_MESSAGE}
-                        photo = photo.model_copy(update=failed)
+                    photo = pending_photo(outcome, role, now, directory)
                     photos.append(photo)
                     added.append(photo.id)
             return case.model_copy(update={"photos": photos})
@@ -187,8 +181,9 @@ def add_photos(
         return added, skipped
 
 
-def _pending(staged: Staged, role: Role, now: datetime) -> PhotoRecord:
-    return PhotoRecord(
+def pending_photo(staged: Staged, role: Role, now: datetime, directory: Path) -> PhotoRecord:
+    """The record of a staged upload. Call it under the case lock, inside `update_case`."""
+    photo = PhotoRecord(
         id=new_id(),
         sha256=staged.sha256,
         file=f"{ORIGINALS_DIR}/{staged.file_name}",
@@ -201,3 +196,9 @@ def _pending(staged: Staged, role: Role, now: datetime) -> PhotoRecord:
         slot=None,
         state="pending",
     )
+    # Checked under the case lock, where deleters decide too: staging ran before it, so
+    # removing a photo with the same bytes may have taken the file since.
+    if not (directory / staged.file_name).exists():
+        log.warning("staged_original_vanished", photo_id=photo.id)
+        return photo.model_copy(update={"state": "failed", "error": VANISHED_MESSAGE})
+    return photo
