@@ -22,7 +22,7 @@ from dental_image_organizer.errors import (
 )
 from dental_image_organizer.services import procedure, procedure_case
 from dental_image_organizer.services.context import AppContext
-from dental_image_organizer.services.intake import UploadOutcome
+from dental_image_organizer.services.intake import Skipped, UploadOutcome
 from dental_image_organizer.services.jobs import JobProgress
 from dental_image_organizer.services.procedure_case import (
     reference_edit,
@@ -50,6 +50,7 @@ from support.synthetic import make_scene
 
 SIZE = (1200, 800)
 VANISHED = "The photo's file was removed while it was being added; drop it again."
+DUPLICATE = "This photo is already in the case."
 
 
 @pytest.fixture(scope="module")
@@ -189,6 +190,25 @@ def test_replacing_the_reference_reprocesses_and_drops_manual_edits(
     assert not old_file.exists()
 
 
+def test_a_selection_left_with_one_photo_falls_back_to_capture_order(ctx: AppContext) -> None:
+    case_id = _case(ctx)
+    _set_reference(ctx, case_id, jpeg(make_scene(64, 600, 400), "2026:10:16 09:00:00"))
+    (photo,) = _upload(
+        ctx, case_id, ("IMG_0001.jpg", jpeg(make_scene(65, 600, 400), "2026:10:16 10:00:00"))
+    )
+    old = _read(ctx, case_id).reference()
+    assert old is not None
+    procedure_case.set_sequence(ctx, case_id, [photo, old.id], 5)
+
+    _set_reference(ctx, case_id, jpeg(make_scene(66, 600, 400), "2026:10:16 08:00:00"))
+
+    case = _read(ctx, case_id)
+    reference = case.reference()
+    assert reference is not None and reference.id != old.id
+    assert case.sequence == SequenceRecord(photo_ids=[], gap_px=5)
+    assert [p.id for p in sequence_photos(case)] == [reference.id, photo]
+
+
 def test_a_photo_dropped_as_reference_becomes_the_reference(
     ctx: AppContext, photos: ProcedureSet
 ) -> None:
@@ -248,6 +268,33 @@ def test_a_reference_whose_staged_file_vanished_is_recorded_failed(
     case = _read(ctx, case_id)
     assert case.photo(reference.id).state == "failed"
     assert (case.photo(intra).state, case.photo(intra).edit) == ("ready", None)
+
+    # Dropping a failed reference again retries it; staging puts its file back.
+    again = _set_reference(ctx, case_id, photos.reference)
+
+    case = _read(ctx, case_id)
+    assert again.added == ()
+    assert [p.id for p in case.photos] == [intra, reference.id]
+    assert case.photo(reference.id).state == "ready"
+    assert case.photo(intra).edit is not None
+
+
+def test_dropping_the_ready_reference_again_keeps_manual_edits(
+    ctx: AppContext, photos: ProcedureSet
+) -> None:
+    case_id, intra, _ = _aligned(ctx, photos)
+    edited = procedure_case.apply_manual_edit(ctx, case_id, intra, photos.truth, "similarity")
+    case_file = ctx.library().case_dir(case_id) / "case.json"
+    saved = case_file.read_bytes()
+
+    outcome = procedure_case.set_reference(ctx, case_id, upload("again.jpg", photos.reference))
+
+    assert outcome == UploadOutcome(None, (), (Skipped("again.jpg", "duplicate", DUPLICATE),))
+    assert case_file.read_bytes() == saved
+    edit = _read(ctx, case_id).photo(intra).edit
+    assert edit is not None and edit.source == "manual"
+    assert edit == edited.photo(intra).edit
+    assert not ctx.jobs.active(case_id)
 
 
 def test_an_unrelated_photo_needs_review(ctx: AppContext, photos: ProcedureSet) -> None:

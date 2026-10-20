@@ -30,6 +30,7 @@ from dental_image_organizer.errors import (
 )
 from dental_image_organizer.services.batch_io import os_error_message, unexpected_message
 from dental_image_organizer.services.intake import (
+    DUPLICATE_MESSAGE,
     Skipped,
     Upload,
     UploadOutcome,
@@ -143,10 +144,24 @@ def set_reference(ctx: AppContext, case_id: str, upload: Upload) -> UploadOutcom
             sequence = case.sequence
             if sequence is not None and gone:
                 kept = [i for i in sequence.photo_ids if i not in gone]
+                # A selection set_sequence would refuse is never stored; the default capture
+                # order takes its place.
+                if len(kept) < SEQUENCE_SIZE[0]:
+                    kept = []
                 sequence = sequence.model_copy(update={"photo_ids": kept})
             return _restaged(case.model_copy(update={"photos": photos, "sequence": sequence}))
 
-        updated = library.update_case(case_id, change)
+        # The case lock is re-entrant, so the check and update_case see the same case. A
+        # change cannot skip its write, so the check runs here, under the same lock.
+        with ctx.case_locks.hold(case_id):
+            current = library.read_case(case_id).reference()
+            # Dropping the ready reference again must not discard the manual edits made
+            # against it (spec §4.8). A failed or pending reference is still retried.
+            if current is not None and current.state == "ready" and current.sha256 == staged.sha256:
+                log.info("reference_unchanged", photo_id=current.id)
+                duplicate = Skipped(staged.name, "duplicate", DUPLICATE_MESSAGE)
+                return UploadOutcome(None, (), (duplicate,))
+            updated = library.update_case(case_id, change)
         for photo in removed:
             _remove_unused_original(ctx, case_id, photo)
         reference = chosen[0]

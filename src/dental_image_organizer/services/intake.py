@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, BinaryIO, Literal
 
 import structlog
@@ -144,7 +144,11 @@ def _publish(part: Path, target: Path) -> None:
 def add_photos(
     ctx: AppContext, case_id: str, uploads: Sequence[Upload], *, role: Role
 ) -> tuple[list[str], list[Skipped]]:
-    """Store the uploads as `pending` photos of the case; return the new ids and the skips."""
+    """Store the uploads as `pending` photos of the case; return the ids to process and the skips.
+
+    A photo that failed earlier and is dropped again is retried under its own record, so the
+    case still holds one record per content.
+    """
     with bound_contextvars(case_id=case_id):
         library = ctx.library()
         directory = library.originals_dir(case_id)
@@ -158,19 +162,31 @@ def add_photos(
         def change(case: CaseRecord) -> CaseRecord:
             added.clear()
             skipped.clear()
-            known = {p.sha256 for p in case.photos}
+            recorded = {p.sha256: p for p in case.photos}
+            seen: set[str] = set()
             now = local_now()
             photos = list(case.photos)
             for outcome in outcomes:
                 if isinstance(outcome, Skipped):
                     skipped.append(outcome)
-                elif outcome.sha256 in known:
+                    continue
+                known = recorded.get(outcome.sha256)
+                # A failed photo is retried rather than reported: its message tells the user to
+                # drop it again, and staging has just put its file back.
+                if outcome.sha256 in seen or (known is not None and known.state != "failed"):
                     skipped.append(Skipped(outcome.name, "duplicate", DUPLICATE_MESSAGE))
-                else:
-                    known.add(outcome.sha256)
+                    continue
+                seen.add(outcome.sha256)
+                if known is None:
                     photo = pending_photo(outcome, role, now, directory)
                     photos.append(photo)
-                    added.append(photo.id)
+                else:
+                    retry = known.model_copy(
+                        update={"state": "pending", "error": None, "edit": None}
+                    )
+                    photo = _file_checked(retry, directory)
+                    photos = [photo if p.id == photo.id else p for p in photos]
+                added.append(photo.id)
             return case.model_copy(update={"photos": photos})
 
         if any(isinstance(o, Staged) for o in outcomes):
@@ -196,9 +212,13 @@ def pending_photo(staged: Staged, role: Role, now: datetime, directory: Path) ->
         slot=None,
         state="pending",
     )
+    return _file_checked(photo, directory)
+
+
+def _file_checked(photo: PhotoRecord, directory: Path) -> PhotoRecord:
     # Checked under the case lock, where deleters decide too: staging ran before it, so
     # removing a photo with the same bytes may have taken the file since.
-    if not (directory / staged.file_name).exists():
+    if not (directory / PurePosixPath(photo.file).name).exists():
         log.warning("staged_original_vanished", photo_id=photo.id)
         return photo.model_copy(update={"state": "failed", "error": VANISHED_MESSAGE})
     return photo

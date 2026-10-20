@@ -129,6 +129,49 @@ def test_dropping_the_same_photo_again_is_reported_as_duplicate(ctx: AppContext)
     assert len(_originals(ctx, case_id)) == 3
 
 
+def _set_state(ctx: AppContext, case_id: str, photo_id: str, **update: object) -> None:
+    def change(case: CaseRecord) -> CaseRecord:
+        return case.replace_photo(case.photo(photo_id).model_copy(update=update))
+
+    ctx.library().update_case(case_id, change)
+
+
+def test_a_failed_photo_dropped_again_is_retried(ctx: AppContext) -> None:
+    case_id = _case(ctx)
+    a, b = _photo(30), _photo(120)
+    (first, second), _ = add_photos(
+        ctx, case_id, [upload("A.jpg", a), upload("B.jpg", b)], role="photo"
+    )
+    _set_state(ctx, case_id, first, state="failed", error=VANISHED)
+
+    added, skipped = add_photos(
+        ctx, case_id, [upload("A again.jpg", a), upload("A copy.jpg", a)], role="photo"
+    )
+
+    case = ctx.library().read_case(case_id)
+    assert added == [first]
+    assert skipped == [Skipped("A copy.jpg", "duplicate", DUPLICATE)]
+    assert [(p.id, p.source_name, p.state, p.error, p.edit) for p in case.photos] == [
+        (first, "A.jpg", "pending", None, None),
+        (second, "B.jpg", "pending", None, None),
+    ]
+    assert len(_originals(ctx, case_id)) == 2
+
+
+def test_a_ready_photo_dropped_again_is_still_a_duplicate(ctx: AppContext) -> None:
+    case_id = _case(ctx)
+    a = _photo(30)
+    (first,), _ = add_photos(ctx, case_id, [upload("A.jpg", a)], role="photo")
+    _set_state(ctx, case_id, first, state="ready")
+
+    added, skipped = add_photos(ctx, case_id, [upload("A again.jpg", a)], role="photo")
+
+    case = ctx.library().read_case(case_id)
+    assert added == []
+    assert skipped == [Skipped("A again.jpg", "duplicate", DUPLICATE)]
+    assert [(p.id, p.state) for p in case.photos] == [(first, "ready")]
+
+
 def test_a_photo_whose_staged_file_vanished_is_recorded_failed(
     ctx: AppContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
