@@ -25,7 +25,7 @@ from dental_image_organizer.ml.model_store import (
 )
 from dental_image_organizer.ml.samples import SampleSource, SampleStore
 from dental_image_organizer.paths import AppDirs
-from dental_image_organizer.services.flips import FLIPS_FILE, FlipStore
+from dental_image_organizer.services.flips import FLIPS_FILE, FlipConfirmation, FlipStore
 
 log = structlog.get_logger(__name__)
 
@@ -167,7 +167,7 @@ class AiRuntime:
         source: SampleSource,
     ) -> bool:
         with self.lock:
-            return training.learn(
+            trained = training.learn(
                 self.dirs.classifier,
                 pairs,
                 slots,
@@ -177,10 +177,25 @@ class AiRuntime:
                 model_hash=self.spec.sha256,
                 timestamp=time.time(),
             )
+            self._drop_classifier()
+            return trained
 
     def retrain(self) -> bool:
         with self.lock:
-            return training.retrain(self.dirs.classifier, self.spec.sha256)
+            trained = training.retrain(self.dirs.classifier, self.spec.sha256)
+            self._drop_classifier()
+            return trained
+
+    def _drop_classifier(self) -> None:
+        # A same-size rewrite within one mtime granule leaves the file signature unchanged, so
+        # the signature alone cannot tell that a retrain replaced the classifier.
+        with self._state:
+            self._classifier = None
+
+    def flip_history(self) -> tuple[FlipConfirmation, ...]:
+        # Reads hold the lock too: on Windows a read racing os.replace fails with PermissionError.
+        with self.lock:
+            return self.flips.load()
 
     def record_flips(
         self, case_id: str, flips: Mapping[Slot, Flip], *, pins: Mapping[Slot, Flip]

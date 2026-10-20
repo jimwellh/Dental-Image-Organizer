@@ -8,7 +8,7 @@ from pathlib import Path
 from dental_image_organizer.core.slots import Slot
 from dental_image_organizer.ml.classifier import train_classifier
 from dental_image_organizer.ml.embedder import EmbeddingPair
-from dental_image_organizer.ml.samples import SampleSource, SampleStore
+from dental_image_organizer.ml.samples import SampleSet, SampleSource, SampleStore
 
 CLASSIFIER_FILE = "model.json"
 
@@ -29,7 +29,7 @@ def learn(
     Callers pass a random `case_id` and content-hash `photo_ids`, which keep patient names out
     of the data folder. Callers that share the folder must serialize calls.
     """
-    SampleStore(directory).append(
+    samples = SampleStore(directory).append(
         pairs,
         slots,
         photo_ids=photo_ids,
@@ -38,12 +38,18 @@ def learn(
         model_hash=model_hash,
         timestamp=timestamp,
     )
-    return retrain(directory, model_hash)
+    # Train on the appended set itself: reloading would round the new embeddings through the
+    # stored precision and decompress the whole store a second time.
+    return _train(directory, samples, model_hash)
 
 
 def retrain(directory: Path, model_hash: str) -> bool:
     """Train from the stored samples of `model_hash`; True once the classifier is trained."""
-    current = SampleStore(directory).load().for_model(model_hash)
+    return _train(directory, SampleStore(directory).load(), model_hash)
+
+
+def _train(directory: Path, samples: SampleSet, model_hash: str) -> bool:
+    current = samples.for_model(model_hash)
     classifier = train_classifier(current.pairs, current.slots, model_hash)
     if classifier is None:
         # A file left from before (damaged, another model's, or trained on labels since

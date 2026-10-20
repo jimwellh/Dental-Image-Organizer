@@ -144,3 +144,31 @@ def test_flips_are_recorded_under_the_runtime(tmp_path: Path) -> None:
     runtime.record_flips("c1", {"upper_right": "none"}, pins={})
     assert isinstance(runtime.flips, FlipStore)
     assert [c.case_id for c in runtime.flips.load()] == ["c1"]
+
+
+def test_flip_history_returns_what_was_recorded(tmp_path: Path) -> None:
+    runtime, _ = _runtime(tmp_path)
+    runtime.record_flips("c1", {"upper_right": "none"}, pins={})
+    assert [(c.case_id, c.slot, c.flip) for c in runtime.flip_history()] == [
+        ("c1", "upper_right", "none")
+    ]
+
+
+def test_retraining_replaces_the_cached_classifier_even_with_an_equal_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, _ = _runtime(tmp_path)
+    monkeypatch.setattr(ai_module, "_signature", lambda path: (1, 1))
+    pairs, slots = synthetic_pairs(MIN_SAMPLES_PER_SLOT, 1)
+    ids = _ids(27)
+    assert runtime.learn(pairs, slots, photo_ids=ids, case_id="c1", source="export")
+    monkeypatch.setattr(ai_module, "_signature", lambda path: (1, 1))
+    first, _ = runtime.classifier()
+    assert runtime.classifier()[0] is first
+    # Relabel the same photos so the stored samples, and the classifier, change.
+    assert runtime.learn(
+        pairs, [*slots[1:], slots[0]], photo_ids=ids, case_id="c1", source="export"
+    )
+    second, _ = runtime.classifier()
+    assert second is not None
+    assert second is not first
