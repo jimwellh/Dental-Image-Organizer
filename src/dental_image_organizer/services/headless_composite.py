@@ -31,6 +31,7 @@ from dental_image_organizer.errors import (
     StorageError,
     UnsupportedFormatError,
 )
+from dental_image_organizer.ml import training
 from dental_image_organizer.ml.assignment import (
     Assignment,
     AssignMethod,
@@ -43,11 +44,11 @@ from dental_image_organizer.ml.classifier import (
     MIN_SAMPLES_PER_SLOT,
     SlotClassifier,
     load_classifier,
-    train_classifier,
 )
 from dental_image_organizer.ml.embedder import Embedder, EmbeddingPair
 from dental_image_organizer.ml.model_store import DEFAULT_MODEL, cached_model, download_model
 from dental_image_organizer.ml.samples import SampleStore
+from dental_image_organizer.ml.training import CLASSIFIER_FILE
 from dental_image_organizer.services.batch_io import (
     MTIME_WARNING,
     capture_time,
@@ -71,7 +72,6 @@ from dental_image_organizer.services.headless import PhotoOutcome
 log = structlog.get_logger(__name__)
 
 WORKING_LONG_EDGE = 1600
-CLASSIFIER_FILE = "model.json"
 
 ORDER_NOTE = (
     "Slots were assigned by shooting order: the AI classifier needs "
@@ -292,11 +292,15 @@ def run_composite(
         if len(kept) < len(placed):
             notes.append(DUPLICATE_PHOTO_NOTE)
         try:
-            trained = _learn(
+            trained = training.learn(
+                paths.classifier_dir(),
                 embeddings.take([photo for _, photo in kept]),
                 [slot for slot, _ in kept],
-                [_photo_id(workings[photo]) for _, photo in kept],
-                ai.embedder.model_hash,
+                photo_ids=[_photo_id(workings[photo]) for _, photo in kept],
+                case_id=uuid.uuid4().hex,
+                source="export",
+                model_hash=ai.embedder.model_hash,
+                timestamp=time.time(),
             )
         except Exception as exc:
             # The composite is written already; a failed sample write must not hide it.
@@ -561,29 +565,3 @@ def _cell_outcome(cell: CellPlan, source: Path) -> CellOutcome:
     return CellOutcome(
         cell.slot, source, cell.confidence, level.angle_deg, level.confident, cell.geometry.flip
     )
-
-
-def _learn(
-    pairs: EmbeddingPair, slots: Sequence[Slot], photo_ids: Sequence[str], model_hash: str
-) -> bool:
-    """Store the placed photos as confirmed samples and retrain; True once the classifier is."""
-    directory = paths.classifier_dir()
-    # A random case id and content-hash photo ids keep patient names out of the data folder.
-    samples = SampleStore(directory).append(
-        pairs,
-        slots,
-        photo_ids=photo_ids,
-        case_id=uuid.uuid4().hex,
-        source="export",
-        model_hash=model_hash,
-        timestamp=time.time(),
-    )
-    current = samples.for_model(model_hash)
-    classifier = train_classifier(current.pairs, current.slots, model_hash)
-    if classifier is None:
-        # A file left from before (damaged, another model's, or trained on labels since
-        # replaced) no longer matches the samples; the next run must agree with "not trained".
-        (directory / CLASSIFIER_FILE).unlink(missing_ok=True)
-        return False
-    classifier.save(directory / CLASSIFIER_FILE)
-    return True

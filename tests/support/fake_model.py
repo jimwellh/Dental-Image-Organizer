@@ -13,6 +13,8 @@ import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
 
+from dental_image_organizer.ml.model_store import ModelSpec
+
 POOL = 56
 POOLED_FEATURES = 3 * (224 // POOL) * (336 // POOL)  # 72
 OUTPUT_DIM = 2688
@@ -40,3 +42,11 @@ def build_fake_model(path: Path, seed: int = 0) -> str:
     onnx.checker.check_model(model)
     path.write_bytes(model.SerializeToString())
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def install_fake_model(models_dir: Path, seed: int = 0) -> ModelSpec:
+    """Write the fake model into a model cache folder and return the spec that verifies it."""
+    models_dir.mkdir(parents=True, exist_ok=True)
+    path = models_dir / "fake.onnx"
+    sha = build_fake_model(path, seed)
+    return ModelSpec("fake.onnx", "https://unused.test", sha, path.stat().st_size)
