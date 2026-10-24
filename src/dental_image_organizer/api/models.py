@@ -1,12 +1,36 @@
-"""Request and response bodies of the HTTP API (spec §4.12, §4.13)."""
+"""Request and response bodies of the HTTP API (spec §4.12, §4.13).
+
+The frontend's TypeScript types are generated from the OpenAPI schema of these models, so every
+body is a model, and responses reuse the `storage.schema` records rather than copies of them.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections import Counter
+from datetime import datetime
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from dental_image_organizer.core.align import AlignModel
+from dental_image_organizer.core.slots import Flip, Slot
+from dental_image_organizer.services import cases
+from dental_image_organizer.services.cases import CaseDetails
+from dental_image_organizer.services.export import ConflictMode, ExportInclude
+from dental_image_organizer.services.intake import UploadOutcome, UploadSkipReason
 from dental_image_organizer.services.jobs import JobSnapshot, JobState
+from dental_image_organizer.storage.archive import ImportOutcome
+from dental_image_organizer.storage.library import LibraryListing, PatientEntry
+from dental_image_organizer.storage.schema import (
+    GAP_COLOR_PATTERN,
+    GAP_PX_MAX,
+    CaseRecord,
+    CaseType,
+    CellSize,
+    Id,
+    PatientRecord,
+    Stage,
+)
 
 
 class ErrorBody(BaseModel):
@@ -54,4 +78,235 @@ class JobView(BaseModel):
             message=snapshot.message,
             result=dict(snapshot.result) if snapshot.result is not None else None,
             error=ErrorBody(code=failure.code, message=failure.message) if failure else None,
+        )
+
+
+class _Request(BaseModel):
+    # A misspelled field would otherwise be dropped silently, and the change with it.
+    model_config = ConfigDict(extra="forbid")
+
+
+# -- library -------------------------------------------------------------------------------
+
+
+class CaseSummary(BaseModel):
+    id: str
+    type: CaseType
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    photos: int
+    needs_review: int
+    pending: int
+    failed: int
+    thumbnails: list[str]
+
+    @classmethod
+    def of(cls, case: CaseRecord) -> CaseSummary:
+        states = Counter(p.state for p in case.photos)
+        return cls(
+            id=case.id,
+            type=case.type,
+            title=case.title,
+            created_at=case.created_at,
+            updated_at=case.updated_at,
+            photos=len(case.photos),
+            needs_review=sum(
+                p.state == "ready" and p.edit is not None and p.edit.status == "needs_review"
+                for p in case.photos
+            ),
+            pending=states["pending"],
+            failed=states["failed"],
+            thumbnails=cases.thumbnails(case),
+        )
+
+
+class PatientView(BaseModel):
+    id: str
+    name: str
+    note: str | None
+    created_at: datetime
+    cases: list[CaseSummary]
+
+    @classmethod
+    def of(cls, entry: PatientEntry) -> PatientView:
+        patient = entry.record
+        return cls(
+            id=patient.id,
+            name=patient.name,
+            note=patient.note,
+            created_at=patient.created_at,
+            cases=[CaseSummary.of(case) for case in entry.cases],
+        )
+
+
+class LibraryProblemView(BaseModel):
+    folder: str
+    message: str
+
+
+class PatientsView(BaseModel):
+    patients: list[PatientView]
+    problems: list[LibraryProblemView]
+
+    @classmethod
+    def of(cls, listing: LibraryListing) -> PatientsView:
+        return cls(
+            patients=[PatientView.of(entry) for entry in listing.patients],
+            problems=[
+                LibraryProblemView(folder=p.folder, message=p.message) for p in listing.problems
+            ],
+        )
+
+
+class PatientPatch(_Request):
+    """Only the fields sent change; `"note": null` clears the note."""
+
+    name: str | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _keeps_a_name(self) -> Self:
+        if "name" in self.model_fields_set and self.name is None:
+            raise ValueError("a patient's name cannot be removed")
+        return self
+
+
+# -- cases ---------------------------------------------------------------------------------
+
+
+class CaseCreate(_Request):
+    """`patient_id` for an existing patient, or `patient_name` (and a note) for a new one."""
+
+    type: CaseType
+    title: str
+    patient_id: str | None = None
+    patient_name: str | None = None
+    patient_note: str | None = None
+
+
+class CaseView(BaseModel):
+    case: CaseRecord
+    patient: PatientRecord
+    suggested_output_scale: float | None
+    flip_defaults: dict[Slot, Flip] | None
+
+    @classmethod
+    def of(cls, details: CaseDetails) -> CaseView:
+        return cls(
+            case=details.case,
+            patient=details.patient,
+            suggested_output_scale=details.suggested_output_scale,
+            flip_defaults=details.flip_defaults,
+        )
+
+
+class SequencePatch(_Request):
+    # The bounds of case.json, so a value the record would refuse is refused as a request.
+    photo_ids: list[Id]
+    gap_px: int = Field(default=0, ge=0, le=GAP_PX_MAX)
+
+
+class CompositePatch(_Request):
+    """Merged into the case's layout: only the fields sent change, and
+    `"baseline_photo_id": null` returns the baseline to the default slot."""
+
+    baseline_photo_id: Id | None = None
+    cell_size: CellSize | None = None
+    gap_px: Annotated[int, Field(ge=0, le=GAP_PX_MAX)] | None = None
+    gap_color: Annotated[str, Field(pattern=GAP_COLOR_PATTERN)] | None = None
+
+    @model_validator(mode="after")
+    def _only_the_baseline_resets(self) -> Self:
+        nulled = [
+            name
+            for name in ("cell_size", "gap_px", "gap_color")
+            if name in self.model_fields_set and getattr(self, name) is None
+        ]
+        if nulled:
+            raise ValueError(f"{', '.join(nulled)} cannot be null")
+        return self
+
+
+class CasePatch(_Request):
+    title: str | None = None
+    output_scale: float | None = None
+    sequence: SequencePatch | None = None
+    composite: CompositePatch | None = None
+
+
+# -- photos --------------------------------------------------------------------------------
+
+
+class ManualEdit(_Request):
+    transform: list[float]
+    model: AlignModel
+
+
+class PhotoPatch(_Request):
+    """Exactly one change per request."""
+
+    stage: Stage | None = None
+    slot: Slot | Literal["tray"] | None = None
+    flip: Flip | None = None
+    edit: ManualEdit | None = None
+    reset: Literal[True] | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> Self:
+        sent = self.model_fields_set
+        if len(sent) != 1 or getattr(self, next(iter(sent))) is None:
+            raise ValueError("send exactly one change")
+        return self
+
+
+class SlotMap(_Request):
+    slots: dict[Slot, str]
+
+
+class SkippedView(BaseModel):
+    name: str
+    reason: UploadSkipReason
+    message: str
+
+
+class UploadResult(BaseModel):
+    job_id: str | None
+    added: list[str]
+    skipped: list[SkippedView]
+
+    @classmethod
+    def of(cls, outcome: UploadOutcome) -> UploadResult:
+        return cls(
+            job_id=outcome.job_id,
+            added=list(outcome.added),
+            skipped=[
+                SkippedView(name=s.name, reason=s.reason, message=s.message)
+                for s in outcome.skipped
+            ],
+        )
+
+
+# -- export and archives -------------------------------------------------------------------
+
+
+class ExportRequest(_Request):
+    # Keeping both never replaces anything, so it is the default.
+    include: list[ExportInclude] | None = None
+    conflict: ConflictMode = "keep_both"
+
+
+class ImportResult(BaseModel):
+    status: Literal["imported", "skipped"]
+    case_id: str
+    patient_id: str
+    title: str
+
+    @classmethod
+    def of(cls, outcome: ImportOutcome) -> ImportResult:
+        return cls(
+            status=outcome.status,
+            case_id=outcome.case_id,
+            patient_id=outcome.patient_id,
+            title=outcome.title,
         )

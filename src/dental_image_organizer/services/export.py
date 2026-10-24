@@ -142,7 +142,12 @@ def start_patient_export(
     def run(progress: JobProgress) -> dict[str, Any]:
         return _export_patient(ctx, patient_id, wanted, conflict, progress)
 
-    return ctx.jobs.submit("export_patient", run, key=f"patient:{patient_id}").id
+    return ctx.jobs.submit("export_patient", run, key=patient_export_key(patient_id)).id
+
+
+def patient_export_key(patient_id: str) -> str:
+    """The job key of a patient's export; case jobs are keyed by the bare case id."""
+    return f"patient:{patient_id}"
 
 
 def _export_patient(
@@ -486,7 +491,7 @@ def export_zip(
     case_id: str | None = None,
     patient_id: str | None = None,
 ) -> tuple[Path, str]:
-    """Pack a finished export into `dirs.exports/<job_id>.zip`; the zip and its download name.
+    """Pack a finished export into a new zip in `dirs.exports`; the zip and its download name.
 
     The download route deletes the zip after sending it. A file deleted since the export is
     left out.
@@ -500,7 +505,7 @@ def export_zip(
         members = _members(library, result, None)
         name = case_export_zip_name(patient.name, case.title, today)
     elif patient_id is not None and case_id is None:
-        result = _finished(ctx, job_id, "export_patient", f"patient:{patient_id}")
+        result = _finished(ctx, job_id, "export_patient", patient_export_key(patient_id))
         patient = library.patient(patient_id).record
         members = []
         for exported in result["cases"]:
@@ -513,7 +518,9 @@ def export_zip(
         name = patient_export_zip_name(patient.name, today)
     else:
         raise ValueError("export_zip takes either a case_id or a patient_id")
-    path = ctx.dirs.exports / f"{job_id}.zip"
+    # One file per call: a double-clicked Download would otherwise let the first request's
+    # cleanup delete the zip the second is about to send.
+    path = ctx.dirs.exports / f"{job_id}-{uuid4().hex[:8]}.zip"
     _write_zip(path, members)
     log.info("export_zip_written", members=len(members))
     return path, name

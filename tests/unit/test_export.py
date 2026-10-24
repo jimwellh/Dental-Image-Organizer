@@ -302,7 +302,8 @@ def test_zip_downloads(ctx: AppContext, photos: ProcedureSet) -> None:
     path, name = export.export_zip(ctx, job_id, case_id=case_id)
 
     assert name == f"{PREFIX}_Export_{_today()}.zip"
-    assert path == ctx.dirs.exports / f"{job_id}.zip"
+    assert path.parent == ctx.dirs.exports
+    assert path.name.startswith(f"{job_id}-")
     with zipfile.ZipFile(path) as zf:
         assert set(zf.namelist()) == {*SINGLES, _sequence()}
         assert {info.compress_type for info in zf.infolist()} == {zipfile.ZIP_STORED}
@@ -317,6 +318,21 @@ def test_zip_downloads(ctx: AppContext, photos: ProcedureSet) -> None:
 
     with zipfile.ZipFile(path) as zf:
         assert set(zf.namelist()) == {*SINGLES[1:], _sequence()}
+
+
+def test_each_zip_of_an_export_has_its_own_file(ctx: AppContext, photos: ProcedureSet) -> None:
+    case_id = _procedure(ctx, photos)
+    job_id = export.start_case_export(ctx, case_id, None, "keep_both")
+    wait(ctx, job_id)
+
+    first, _ = export.export_zip(ctx, job_id, case_id=case_id)
+    second, _ = export.export_zip(ctx, job_id, case_id=case_id)
+
+    # A double-clicked Download deletes one zip after sending it; the other must stay intact.
+    assert first != second
+    first.unlink()
+    with zipfile.ZipFile(second) as zf:
+        assert set(zf.namelist()) == {*SINGLES, _sequence()}
 
 
 def test_include_must_fit_the_case_type(ctx: AppContext) -> None:

@@ -17,7 +17,18 @@ from starlette.types import Scope
 
 from dental_image_organizer.api.errors import install_error_handlers
 from dental_image_organizer.api.lifecycle import IdleWatch, lifespan
-from dental_image_organizer.api.routes import jobs, settings, system
+from dental_image_organizer.api.routes import (
+    archive,
+    cases,
+    composite,
+    export,
+    jobs,
+    patients,
+    photos,
+    render,
+    settings,
+    system,
+)
 from dental_image_organizer.api.security import LocalRequestGuard
 from dental_image_organizer.services.context import AppContext
 
@@ -84,7 +95,19 @@ def create_app(
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"], www_redirect=False
     )
-    for router in (system.router, settings.router, jobs.router):
+    routers = (
+        system.router,
+        settings.router,
+        jobs.router,
+        patients.router,
+        cases.router,
+        photos.router,
+        composite.router,
+        render.router,
+        export.router,
+        archive.router,
+    )
+    for router in routers:
         app.include_router(router, prefix="/api")
     # After every router: an unknown API path answers JSON, never the SPA's index.html.
     app.add_api_route(

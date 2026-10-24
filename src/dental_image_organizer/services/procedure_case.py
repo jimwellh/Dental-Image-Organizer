@@ -149,7 +149,7 @@ def set_reference(ctx: AppContext, case_id: str, upload: Upload) -> UploadOutcom
                 if len(kept) < SEQUENCE_SIZE[0]:
                     kept = []
                 sequence = sequence.model_copy(update={"photo_ids": kept})
-            return _restaged(case.model_copy(update={"photos": photos, "sequence": sequence}))
+            return restaged(case.model_copy(update={"photos": photos, "sequence": sequence}))
 
         # The case lock is re-entrant, so the check and update_case see the same case. A
         # change cannot skip its write, so the check runs here, under the same lock.
@@ -163,7 +163,7 @@ def set_reference(ctx: AppContext, case_id: str, upload: Upload) -> UploadOutcom
                 return UploadOutcome(None, (), (duplicate,))
             updated = library.update_case(case_id, change)
         for photo in removed:
-            _remove_unused_original(ctx, case_id, photo)
+            remove_unused_original(ctx, case_id, photo)
         reference = chosen[0]
         others = [p.id for p in updated.photos if p.id != reference.id]
         job = _submit(ctx, "reference", case_id, [reference.id, *others])
@@ -171,7 +171,8 @@ def set_reference(ctx: AppContext, case_id: str, upload: Upload) -> UploadOutcom
         return UploadOutcome(job.id, tuple(p.id for p in created), ())
 
 
-def _remove_unused_original(ctx: AppContext, case_id: str, photo: PhotoRecord) -> None:
+def remove_unused_original(ctx: AppContext, case_id: str, photo: PhotoRecord) -> None:
+    """Delete the original of a photo whose record is gone, unless another record uses it."""
     library = ctx.library()
     # Decided under the case lock after the record is gone, never inside the change that
     # removed it: a write that failed would otherwise lose a file a record still uses. Uploads
@@ -183,7 +184,7 @@ def _remove_unused_original(ctx: AppContext, case_id: str, photo: PhotoRecord) -
         try:
             library.original_path(case_id, photo).unlink(missing_ok=True)
         except OSError as exc:
-            # The reference is replaced already; a file left behind only costs disk space.
+            # The record is gone already; a file left behind only costs disk space.
             log.warning(
                 "original_remove_failed",
                 photo_id=photo.id,
@@ -246,7 +247,7 @@ def _process_reference(ctx: AppContext, case_id: str, reference: PhotoRecord) ->
         if current is None or current.role != "reference":
             return case  # replaced meanwhile; the new reference's job handles the case
         if decoded is None:
-            return _restaged(case.replace_photo(_failed(current, error)))
+            return restaged(case.replace_photo(_failed(current, error)))
         updated = with_metadata(current, decoded)
         try:
             size = output_size(decoded.size, _scale(case))
@@ -256,7 +257,7 @@ def _process_reference(ctx: AppContext, case_id: str, reference: PhotoRecord) ->
         else:
             ready = {"state": "ready", "error": None, "edit": reference_edit(size)}
             updated = updated.model_copy(update=ready)
-        return _restaged(case.replace_photo(updated))
+        return restaged(case.replace_photo(updated))
 
     return _find(ctx.library().update_case(case_id, change), reference.id)
 
@@ -291,7 +292,7 @@ def _process_photo(ctx: AppContext, case_id: str, photo_id: str) -> PhotoRecord 
                 edit = edit_from_alignment(computed, output_size(now.size, _scale(case)))
             ready = {"state": "ready", "error": None, "edit": edit}
             updated = updated.model_copy(update=ready)
-        return _restaged(case.replace_photo(updated))
+        return restaged(case.replace_photo(updated))
 
     return _find(ctx.library().update_case(case_id, change), photo_id)
 
@@ -580,7 +581,8 @@ def auto_stages(case: CaseRecord) -> dict[str, Stage | None]:
     return stages
 
 
-def _restaged(case: CaseRecord) -> CaseRecord:
+def restaged(case: CaseRecord) -> CaseRecord:
+    """The case with the stage rule applied to every photo whose stage is automatic."""
     stages = auto_stages(case)
     photos = [
         p.model_copy(update={"stage": stages[p.id]}) if p.stage_source == "auto" else p
@@ -621,10 +623,10 @@ def sequence_photos(case: CaseRecord) -> list[PhotoRecord]:
     chosen = case.sequence.photo_ids if case.sequence is not None else []
     if chosen:
         return [usable[i] for i in chosen if i in usable]
-    return sorted(usable.values(), key=_capture_order)
+    return sorted(usable.values(), key=capture_order)
 
 
-def _capture_order(photo: PhotoRecord) -> tuple[datetime, str]:
+def capture_order(photo: PhotoRecord) -> tuple[datetime, str]:
     # The wall-clock time as recorded orders one case: EXIF times that carry an offset and
     # upload times must still compare with naive EXIF times.
     when = photo.captured_at.replace(tzinfo=None) if photo.captured_at else datetime.max
