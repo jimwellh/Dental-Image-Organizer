@@ -21,6 +21,7 @@ from dental_image_organizer.paths import AppDirs
 from dental_image_organizer.services.ai import AiRuntime
 from dental_image_organizer.services.jobs import JobManager, JobSnapshot
 from dental_image_organizer.services.originals import ReferenceCache
+from dental_image_organizer.services.teach import TeachSessions
 from dental_image_organizer.storage.cache import BlobCache
 from dental_image_organizer.storage.library import CaseLocks, Library
 
@@ -43,6 +44,7 @@ class AppContext:
     executor: ThreadPoolExecutor
     # One Library per root: it holds the scan index, so every caller must share it.
     _library: Library = field(init=False, repr=False)
+    teach: TeachSessions = field(init=False)
     _settings_lock: threading.Lock = field(init=False, repr=False, default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
@@ -107,6 +109,7 @@ def create_context(
         references=ReferenceCache(),
         executor=executor,
     )
+    ctx.teach = TeachSessions(ctx)
     # Only at startup: later in the run, an import in this process may be staging its folder.
     ctx.library().clean_staging()
     _evict(cache)
