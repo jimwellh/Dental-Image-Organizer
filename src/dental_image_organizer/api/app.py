@@ -20,9 +20,11 @@ from dental_image_organizer.api.lifecycle import IdleWatch, lifespan
 from dental_image_organizer.api.routes import (
     archive,
     cases,
+    classifier,
     composite,
     export,
     jobs,
+    model,
     patients,
     photos,
     render,
@@ -106,6 +108,8 @@ def create_app(
         render.router,
         export.router,
         archive.router,
+        model.router,
+        classifier.router,
     )
     for router in routers:
         app.include_router(router, prefix="/api")

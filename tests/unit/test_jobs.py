@@ -367,3 +367,22 @@ def test_a_dispatch_failing_during_close_finishes_the_job_once(path: str) -> Non
     assert finished.count(last) == 1
     assert not any(e["log_level"] in ("error", "critical") for e in logs)
     assert not jobs.active("k")
+
+
+def test_active_job_names_the_newest_unfinished_job_of_a_key(jobs: JobManager) -> None:
+    release = threading.Event()
+
+    def hold(progress: JobProgress) -> None:
+        release.wait(TIMEOUT)
+
+    first = jobs.submit("demo", hold, key="k")
+    second = jobs.submit("demo", lambda p: None, key="k")
+    other = jobs.submit("demo", hold, key="other")
+    active = jobs.active_job("k")
+    assert active is not None
+    assert active.id == second.id
+    assert jobs.active_job("missing") is None
+    release.set()
+    for snapshot in (first, second, other):
+        jobs.wait(snapshot.id, timeout=TIMEOUT)
+    assert jobs.active_job("k") is None

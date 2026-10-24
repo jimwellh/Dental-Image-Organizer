@@ -15,10 +15,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from dental_image_organizer.core.align import AlignModel
 from dental_image_organizer.core.slots import Flip, Slot
 from dental_image_organizer.services import cases
+from dental_image_organizer.services.ai import ClassifierStatus
 from dental_image_organizer.services.cases import CaseDetails
 from dental_image_organizer.services.export import ConflictMode, ExportInclude
+from dental_image_organizer.services.flips import FlipStatus
 from dental_image_organizer.services.intake import UploadOutcome, UploadSkipReason
 from dental_image_organizer.services.jobs import JobSnapshot, JobState
+from dental_image_organizer.services.teach import SessionState, TeachSession
 from dental_image_organizer.storage.archive import ImportOutcome
 from dental_image_organizer.storage.library import LibraryListing, PatientEntry
 from dental_image_organizer.storage.schema import (
@@ -29,6 +32,7 @@ from dental_image_organizer.storage.schema import (
     CellSize,
     Id,
     PatientRecord,
+    PhotoState,
     Stage,
 )
 
@@ -310,3 +314,99 @@ class ImportResult(BaseModel):
             patient_id=outcome.patient_id,
             title=outcome.title,
         )
+
+
+# -- AI model, classifier, and teaching ------------------------------------------------------
+
+
+class ModelStatus(BaseModel):
+    available: bool
+    size_bytes: int
+    # Where the download comes from, so the consent text can name it (spec §4.6).
+    host: str
+    download_job_id: str | None
+
+
+class FlipStatusView(BaseModel):
+    effective: Flip
+    start: Flip
+    learned: Flip | None
+    pinned: bool
+    confirmations: int
+
+    @classmethod
+    def of(cls, status: FlipStatus) -> FlipStatusView:
+        return cls(
+            effective=status.effective,
+            start=status.start,
+            learned=status.learned,
+            pinned=status.pinned,
+            confirmations=status.confirmations,
+        )
+
+
+class ClassifierView(BaseModel):
+    trained: bool
+    min_samples_per_slot: int
+    counts: dict[Slot, int]
+    stale_samples: int
+    damaged: str | None
+    model_available: bool
+    flips: dict[Slot, FlipStatusView]
+
+    @classmethod
+    def of(
+        cls, status: ClassifierStatus, flips: dict[Slot, FlipStatus], *, min_samples: int
+    ) -> ClassifierView:
+        return cls(
+            trained=status.trained,
+            min_samples_per_slot=min_samples,
+            counts=status.counts,
+            stale_samples=status.stale_samples,
+            damaged=status.damaged,
+            model_available=status.model_available,
+            flips={slot: FlipStatusView.of(flip) for slot, flip in flips.items()},
+        )
+
+
+class TeachPhotoView(BaseModel):
+    id: str
+    name: str
+    captured_at: datetime | None
+    state: PhotoState
+    error: str | None
+
+
+class TeachSessionView(BaseModel):
+    id: str
+    state: SessionState
+    photos: list[TeachPhotoView]
+    proposal: dict[Slot, str]
+    job_id: str
+
+    @classmethod
+    def of(cls, session: TeachSession) -> TeachSessionView:
+        return cls(
+            id=session.id,
+            state=session.state,
+            photos=[
+                TeachPhotoView(
+                    id=p.id, name=p.name, captured_at=p.captured_at, state=p.state, error=p.error
+                )
+                for p in session.photos
+            ],
+            proposal=dict(session.proposal),
+            job_id=session.job_id,
+        )
+
+
+class TeachUpload(BaseModel):
+    # Both are null when every file was skipped: no session was started.
+    session_id: str | None
+    job_id: str | None
+    skipped: list[SkippedView]
+
+
+class TeachConfirm(_Request):
+    slots: dict[Slot, str]
+    flips: dict[Slot, Flip] = Field(default_factory=dict)

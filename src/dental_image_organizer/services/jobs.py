@@ -118,6 +118,15 @@ class JobManager:
                 not job.finished and (key is None or job.key == key) for job in self._jobs.values()
             )
 
+    def active_job(self, key: str) -> JobSnapshot | None:
+        """The newest queued or running job of `key`, so a repeated request can name it."""
+        with self._lock:
+            # Dicts keep insertion order, so the last match is the newest submission.
+            return next(
+                (j for j in reversed(self._jobs.values()) if j.key == key and not j.finished),
+                None,
+            )
+
     def active_any(self, keys: Iterable[str]) -> bool:
         wanted = set(keys)
         with self._lock:
