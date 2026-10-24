@@ -235,11 +235,11 @@ def process_photos(
             processed=len(processed),
             failed=sum(p.state == "failed" for p in processed),
         )
-        return {"photos": [_outcome(p) for p in processed]}
+        return {"photos": [photo_outcome(p) for p in processed]}
 
 
 def _process_reference(ctx: AppContext, case_id: str, reference: PhotoRecord) -> PhotoRecord | None:
-    decoded, error = _decode(ctx, case_id, reference)
+    decoded, error = decode_photo(ctx, case_id, reference)
 
     def change(case: CaseRecord) -> CaseRecord:
         current = _find(case, reference.id)
@@ -247,7 +247,7 @@ def _process_reference(ctx: AppContext, case_id: str, reference: PhotoRecord) ->
             return case  # replaced meanwhile; the new reference's job handles the case
         if decoded is None:
             return _restaged(case.replace_photo(_failed(current, error)))
-        updated = _with_metadata(current, decoded)
+        updated = with_metadata(current, decoded)
         try:
             size = output_size(decoded.size, _scale(case))
         except OutputTooLargeError as exc:
@@ -267,7 +267,7 @@ def _process_photo(ctx: AppContext, case_id: str, photo_id: str) -> PhotoRecord 
     # Deleted meanwhile, or made the reference, which its own job processes.
     if photo is None or photo.role == "reference":
         return None
-    decoded, error = _decode(ctx, case_id, photo)
+    decoded, error = decode_photo(ctx, case_id, photo)
     reference = _ready_reference(case)
     computed: ProcedureEdit | None = None
     if decoded is not None and reference is not None and not _is_manual(photo):
@@ -277,7 +277,7 @@ def _process_photo(ctx: AppContext, case_id: str, photo_id: str) -> PhotoRecord 
         current = _find(case, photo_id)
         if current is None or current.role == "reference":
             return case
-        updated = current if decoded is None else _with_metadata(current, decoded)
+        updated = current if decoded is None else with_metadata(current, decoded)
         # Manual edits are never overwritten by automatic processing (spec §4.8).
         manual = _is_manual(current)
         if error is not None:
@@ -296,7 +296,7 @@ def _process_photo(ctx: AppContext, case_id: str, photo_id: str) -> PhotoRecord 
     return _find(ctx.library().update_case(case_id, change), photo_id)
 
 
-def _decode(
+def decode_photo(
     ctx: AppContext, case_id: str, photo: PhotoRecord
 ) -> tuple[DecodedImage | None, str | None]:
     """The decoded original, with its working copy cached; or the failure message (§4.13)."""
@@ -332,7 +332,7 @@ def _align(
         return None, unexpected_message(exc)
 
 
-def _with_metadata(photo: PhotoRecord, decoded: DecodedImage) -> PhotoRecord:
+def with_metadata(photo: PhotoRecord, decoded: DecodedImage) -> PhotoRecord:
     width, height = decoded.size
     update: dict[str, Any] = {"width": width, "height": height}
     # Without an EXIF time, the provisional time from the upload stays (spec §4.4 step 5).
@@ -345,7 +345,7 @@ def _failed(photo: PhotoRecord, error: str | None, keep: EditRecord | None = Non
     return photo.model_copy(update={"state": "failed", "error": error, "edit": keep})
 
 
-def _outcome(photo: PhotoRecord) -> dict[str, Any]:
+def photo_outcome(photo: PhotoRecord) -> dict[str, Any]:
     return {
         "photo_id": photo.id,
         "state": photo.state,
