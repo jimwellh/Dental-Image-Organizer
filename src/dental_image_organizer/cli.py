@@ -8,7 +8,7 @@ from typing import Annotated
 
 import typer
 
-from dental_image_organizer import __version__
+from dental_image_organizer import __version__, server
 from dental_image_organizer.config import SettingsStore
 from dental_image_organizer.core.slots import DEFAULT_FLIPS, FLIPS, SLOTS, Flip, Slot, parse_slot
 from dental_image_organizer.errors import CaseExistsError, DioError
@@ -53,6 +53,37 @@ def main(
     ] = False,
 ) -> None:
     """Align, color-match, and compose clinical intraoral photos."""
+
+
+@app.command()
+def serve(
+    port: Annotated[
+        int | None,
+        typer.Option(
+            min=server.MIN_PORT,
+            max=server.MAX_PORT,
+            help="Use only this port. Default: the last run's port, else the first free one "
+            f"of {server.PORTS[0]}-{server.PORTS[-1]}.",
+        ),
+    ] = None,
+    no_browser: Annotated[
+        bool, typer.Option("--no-browser", help="Do not open the app in the browser.")
+    ] = False,
+    detach: Annotated[
+        bool,
+        typer.Option(
+            "--detach", help="Run in the background and return once it answers (the launcher)."
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Log debug details, such as alignment metrics.")
+    ] = False,
+) -> None:
+    """Start the local server and open the app in the browser."""
+    start = server.serve_detached if detach else server.serve
+    code = start(port=port, open_browser=not no_browser, verbose=verbose)
+    if code:
+        raise typer.Exit(code)
 
 
 @app.command()
