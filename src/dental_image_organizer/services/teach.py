@@ -294,6 +294,8 @@ class TeachSessions:
                 ctx.ai.learn(pairs, placed, photo_ids=photo_ids, case_id=case_id, source="teach")
                 ctx.ai.record_flips(case_id, confirmed, pins=ctx.settings.get().flip_pins)
             except BaseException:
+                # Retrying is safe: samples are keyed by photo id and flips by session id,
+                # so a second attempt replaces the first one's entries instead of adding.
                 with self._lock:
                     entry.confirming = False
                 raise

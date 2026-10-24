@@ -6,6 +6,7 @@ import io
 import threading
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -151,6 +152,31 @@ def test_invalid_confirmations_are_rejected(
     finally:
         release.set()
         taught.jobs.wait(busy.job_id, timeout=60)
+
+
+def test_a_confirm_retried_after_a_failure_learns_each_photo_once(
+    taught: AppContext, nine: Files, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _start(taught, nine)
+    real = taught.ai.record_flips
+    calls: list[int] = []
+
+    def flaky(*args: Any, **kwargs: Any) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError(28, "No space left on device")
+        real(*args, **kwargs)
+
+    monkeypatch.setattr(taught.ai, "record_flips", flaky)
+    with pytest.raises(OSError, match="No space"):
+        taught.teach.confirm(session.id, session.proposal, {})
+    assert taught.teach.get(session.id).state == "ready"
+    taught.teach.confirm(session.id, session.proposal, {})
+    assert len(SampleStore(taught.dirs.classifier).load().slots) == 9
+    entries = [c for c in taught.ai.flip_history() if c.case_id == f"teach:{session.id}"]
+    assert len(entries) == 9
+    with pytest.raises(TeachSessionNotFoundError):
+        taught.teach.get(session.id)
 
 
 def test_thumbnails(taught: AppContext, nine: Files) -> None:
