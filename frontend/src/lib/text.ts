@@ -18,3 +18,11 @@ export function matchesPatient(patient: PatientView, query: string): boolean {
     foldForSearch(patient.note ?? "").includes(needle)
   );
 }
+
+/**
+ * Fills the `{name}` placeholders of a string. A replacer function, not a replacement string:
+ * user text such as a title may hold `$&` or `$1`, which a plain replacement would rewrite.
+ */
+export function fill(template: string, values: Readonly<Record<string, string>>): string {
+  return template.replace(/\{(\w+)\}/g, (whole, name: string) => values[name] ?? whole);
+}

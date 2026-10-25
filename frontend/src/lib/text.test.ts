@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { patientView } from "../test/records";
-import { foldForSearch, matchesPatient } from "./text";
+import { fill, foldForSearch, matchesPatient } from "./text";
 
 describe("foldForSearch", () => {
   it("folds Unicode form, case, and spacing", () => {
@@ -22,5 +22,17 @@ describe("matchesPatient", () => {
 
   it("copes with a patient without a note", () => {
     expect(matchesPatient(patientView({ name: "Bo Li", note: null }), "chart")).toBe(false);
+  });
+});
+
+describe("fill", () => {
+  it("keeps $ patterns and braces of the values as they are", () => {
+    expect(fill("{title}: {n} files", { title: "a $& {n} $1", n: "2" })).toBe(
+      "a $& {n} $1: 2 files",
+    );
+  });
+
+  it("leaves an unknown placeholder visible", () => {
+    expect(fill("{x}", {})).toBe("{x}");
   });
 });

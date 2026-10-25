@@ -3,6 +3,7 @@ import { useState } from "react";
 import { createQueryClient } from "./api/queries";
 import { describeError } from "./api/http";
 import { Link, useRoute, type Route } from "./lib/router";
+import { CaseScreen } from "./features/case/CaseScreen";
 import { LibraryScreen } from "./features/library/LibraryScreen";
 import { Shell } from "./features/shell/Shell";
 import { useNotify } from "./features/shell/notify";
@@ -17,7 +18,7 @@ function Screen({ route }: { route: Route }) {
     case "library":
       return <LibraryScreen />;
     case "case":
-      return <h1 className="text-xl font-semibold">{en.nav.case}</h1>;
+      return <CaseScreen caseId={route.caseId} />;
     case "teach":
       return <h1 className="text-xl font-semibold">{en.nav.teach}</h1>;
     case "settings":
