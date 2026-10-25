@@ -1,7 +1,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
-import { apiProxy } from "./dev/proxy";
+import { apiProxy } from "./dev/proxy.ts";
 
 // The backend's default port (spec §4.3); `uv run dio serve --no-browser` listens there.
 const BACKEND = "http://127.0.0.1:8765";

@@ -1,4 +1,4 @@
-import { apiProxy } from "./proxy";
+import { apiProxy, DEV_ORIGINS } from "./proxy";
 
 const BACKEND = "http://127.0.0.1:8765";
 
@@ -31,10 +31,19 @@ test("targets the backend and rewrites Host", () => {
   expect(apiProxy(BACKEND)).toMatchObject({ target: BACKEND, changeOrigin: true });
 });
 
-test("rewrites the browser's origin to the backend's own", () => {
-  const request = fakeRequest({ origin: "http://localhost:5173" });
+test.each([...DEV_ORIGINS])(
+  "rewrites the dev server's origin %s to the backend's own",
+  (origin) => {
+    const request = fakeRequest({ origin });
+    proxyReqHook()(request);
+    expect(request.headers.origin).toBe(BACKEND);
+  },
+);
+
+test("leaves a foreign origin for the backend to refuse", () => {
+  const request = fakeRequest({ origin: "https://evil.example" });
   proxyReqHook()(request);
-  expect(request.headers.origin).toBe(BACKEND);
+  expect(request.headers.origin).toBe("https://evil.example");
 });
 
 test("adds no origin to a request that had none", () => {
