@@ -45,6 +45,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: npm ci
+      - run: uv sync --locked
+        working-directory: .
+      - name: Generated API types are current
+        run: |
+          npm run gen:api
+          git diff --exit-code -- src/api/openapi.json src/api/schema.d.ts
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run format:check

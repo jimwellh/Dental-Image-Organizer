@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "gen:api": "uv run python ../scripts/export_openapi.py src/api/openapi.json && openapi-typescript src/api/openapi.json --output src/api/schema.d.ts",
     "test": "vitest run",
     "check": "npm run lint && npm run typecheck && npm run format:check && npm test"
   },
