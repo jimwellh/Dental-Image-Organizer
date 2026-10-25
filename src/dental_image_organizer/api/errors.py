@@ -35,6 +35,14 @@ log = structlog.get_logger(__name__)
 INTERNAL_MESSAGE = "An unexpected error occurred; see the log file."
 INVALID_MESSAGE = "The request is not valid."
 
+# For the OpenAPI schema of every route: the handlers below answer each error with this body,
+# a failed request validation included, so FastAPI's HTTPValidationError is never sent.
+ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    422: {"model": ErrorResponse, "description": "The request is not valid."},
+    "4XX": {"model": ErrorResponse},
+    "5XX": {"model": ErrorResponse},
+}
+
 STATUS_BY_ERROR: Mapping[type[DioError], int] = MappingProxyType(
     {
         NotFoundError: 404,

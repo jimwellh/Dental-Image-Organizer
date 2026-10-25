@@ -15,7 +15,7 @@ from starlette.responses import Response
 from starlette.staticfiles import PathLike, StaticFiles
 from starlette.types import Scope
 
-from dental_image_organizer.api.errors import install_error_handlers
+from dental_image_organizer.api.errors import ERROR_RESPONSES, install_error_handlers
 from dental_image_organizer.api.lifecycle import IdleWatch, lifespan
 from dental_image_organizer.api.routes import (
     archive,
@@ -112,7 +112,7 @@ def create_app(
         classifier.router,
     )
     for router in routers:
-        app.include_router(router, prefix="/api")
+        app.include_router(router, prefix="/api", responses=ERROR_RESPONSES)
     # After every router: an unknown API path answers JSON, never the SPA's index.html.
     app.add_api_route(
         "/api/{rest:path}", _unknown_api, methods=_ALL_METHODS, include_in_schema=False

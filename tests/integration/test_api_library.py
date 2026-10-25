@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 import numpy as np
 import pillow_heif
+import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 from PIL import Image
@@ -22,6 +23,7 @@ from structlog.testing import capture_logs
 
 from dental_image_organizer.api.app import create_app
 from dental_image_organizer.core.slots import DEFAULT_FLIPS
+from dental_image_organizer.services import reveal
 from dental_image_organizer.services.context import AppContext
 from dental_image_organizer.services.jobs import JobProgress
 from dental_image_organizer.storage.library import local_now
@@ -140,6 +142,25 @@ def test_patients_and_cases_lifecycle(client: TestClient, ctx: AppContext) -> No
     assert _error(gone)["code"] == "case_not_found"
     trashed = ctx.library().root / ".trash" / moved.parent.name / moved.name
     assert (trashed / "case.json").is_file()
+
+
+def test_views_name_the_folders_to_reveal(
+    client: TestClient, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    revealed: list[Path] = []
+    monkeypatch.setattr(reveal, "reveal", revealed.append)
+    # The colon cannot be in a folder name, so the folder differs from the display name.
+    view = _create(client, patient_name="Alex: Wang")
+    case_dir = ctx.library().case_dir(view["case"]["id"])
+    ctx.library().export_dir(view["case"]["id"])
+
+    assert view["folder"] == f"Alex Wang/{case_dir.name}"
+    [patient] = client.get("/api/patients").json()["patients"]
+    assert (patient["name"], patient["folder"]) == ("Alex: Wang", "Alex Wang")
+    assert patient["cases"][0]["folder"] == view["folder"]
+    for path in (view["folder"], f"{view['folder']}/export"):
+        assert client.post("/api/system/reveal", json={"path": path}).status_code == 204
+    assert revealed == [case_dir.resolve(), (case_dir / "export").resolve()]
 
 
 def test_creating_a_case_needs_exactly_one_patient(client: TestClient) -> None:

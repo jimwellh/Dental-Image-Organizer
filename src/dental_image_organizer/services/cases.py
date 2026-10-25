@@ -48,6 +48,7 @@ _PATIENT_BUSY_MESSAGE = "Wait for the running jobs of this patient to finish bef
 class CaseDetails:
     case: CaseRecord
     patient: PatientRecord
+    folder: str  # relative to the library root, for Reveal in Finder
     suggested_output_scale: float | None
     flip_defaults: dict[Slot, Flip] | None
 
@@ -93,10 +94,12 @@ def case_details(ctx: AppContext, case_id: str) -> CaseDetails:
 
 def details_of(ctx: AppContext, case: CaseRecord) -> CaseDetails:
     """What the case screen shows besides the record, for a case as read or as just changed."""
-    patient = ctx.library().patient_record(case.patient_id)
+    library = ctx.library()
+    patient = library.patient_record(case.patient_id)
+    folder = library.relative(library.case_dir(case.id))
     if case.type == "composite":
-        return CaseDetails(case, patient, None, composite_case.composite_flips(ctx))
-    return CaseDetails(case, patient, procedure_case.suggested_output_scale(case), None)
+        return CaseDetails(case, patient, folder, None, composite_case.composite_flips(ctx))
+    return CaseDetails(case, patient, folder, procedure_case.suggested_output_scale(case), None)
 
 
 def change_case(

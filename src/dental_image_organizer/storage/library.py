@@ -15,7 +15,7 @@ import re
 import shutil
 import threading
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -98,6 +98,7 @@ class PatientEntry:
     record: PatientRecord
     folder: Path
     cases: tuple[CaseRecord, ...]
+    case_folders: Mapping[str, Path]  # by case id
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,7 @@ class Library:
                     continue
                 patient_dirs[patient.id] = pdir
                 cases: list[CaseRecord] = []
+                folders: dict[str, Path] = {}
                 cdirs, patient_error = _child_dirs(pdir)
                 if patient_error:
                     problems.append(LibraryProblem(pdir.name, patient_error))
@@ -253,10 +255,10 @@ class Library:
                         other = f"{case_dirs[case.id].parent.name}/{case_dirs[case.id].name}"
                         problems.append(LibraryProblem(rel, _duplicate_message("case", other)))
                         continue
-                    case_dirs[case.id] = cdir
+                    case_dirs[case.id] = folders[case.id] = cdir
                     cases.append(self._in_folder(case, patient.id))
                 cases.sort(key=lambda c: c.created_at, reverse=True)
-                patients.append(PatientEntry(patient, pdir, tuple(cases)))
+                patients.append(PatientEntry(patient, pdir, tuple(cases), folders))
             patients.sort(key=lambda e: (_key(e.record.name), e.folder.name))
             self._files = seen
             self._patient_dirs = patient_dirs
@@ -392,6 +394,7 @@ class Library:
         index has it. Call it holding the I/O lock."""
         record = self._patient_at(folder)
         cases: list[CaseRecord] = []
+        folders: dict[str, Path] = {}
         for cdir in _child_dirs(folder)[0]:
             parsed = self._parse(cdir / CASE_FILE, parse_case, self._files)
             if parsed is None or parsed.record is None:
@@ -403,8 +406,9 @@ class Library:
                     continue  # a copy of a case that lives elsewhere, which the listing reports
                 return None  # moved, copied, or added in Finder: only a scan can tell which
             cases.append(self._in_folder(case, record.id))
+            folders[case.id] = cdir
         cases.sort(key=lambda c: c.created_at, reverse=True)
-        return PatientEntry(record, folder, tuple(cases))
+        return PatientEntry(record, folder, tuple(cases), folders)
 
     def create_patient(self, name: str, note: str | None) -> PatientRecord:
         display = unicodedata.normalize("NFC", name).strip()
@@ -454,7 +458,7 @@ class Library:
             folder = self._root / self._unique(self._root, base)
             self._write(folder / PATIENT_FILE, record, "patient")
             self._patient_dirs[record.id] = folder
-            return PatientEntry(record, folder, ())
+            return PatientEntry(record, folder, (), {})
 
     def remove_empty_patient(self, patient_id: str) -> None:
         """Undo `adopt_patient` after a failed import. A folder that holds anything else stays."""
@@ -568,6 +572,11 @@ class Library:
 
     def case_dir(self, case_id: str) -> Path:
         return self._case_dir(case_id)
+
+    def relative(self, folder: Path) -> str:
+        """A folder of the library as `resolve` and Reveal in Finder take it: relative to the
+        root, `/`-separated, under its name on disk."""
+        return folder.relative_to(self._root).as_posix()
 
     def read_case(self, case_id: str) -> CaseRecord:
         with self._io:

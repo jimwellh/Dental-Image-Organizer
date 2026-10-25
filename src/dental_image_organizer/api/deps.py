@@ -25,6 +25,12 @@ JPEG_RESPONSE: dict[int | str, dict[str, Any]] = {
 ZIP_RESPONSE: dict[int | str, dict[str, Any]] = {
     200: {"content": {"application/zip": {}}, "description": "A zip download."}
 }
+EVENT_STREAM_RESPONSE: dict[int | str, dict[str, Any]] = {
+    200: {
+        "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        "description": "Server-Sent Events: each event is the job's state, its data a JobView.",
+    }
+}
 
 
 def context(request: Request) -> AppContext:

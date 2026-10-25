@@ -224,6 +224,42 @@ def test_the_api_docs_page_is_not_served(client: TestClient) -> None:
     assert "/api/health" in schema.json()["paths"]
 
 
+def test_the_schema_declares_the_real_error_body(client: TestClient) -> None:
+    schema = client.get("/api/openapi.json").json()
+    error = {"$ref": "#/components/schemas/ErrorResponse"}
+
+    assert "ErrorResponse" in schema["components"]["schemas"]
+    assert {"HTTPValidationError", "ValidationError"}.isdisjoint(schema["components"]["schemas"])
+    # One path of each router.
+    for path in (
+        "/api/health",
+        "/api/settings",
+        "/api/jobs/{job_id}",
+        "/api/patients",
+        "/api/cases/{case_id}",
+        "/api/cases/{case_id}/photos",
+        "/api/cases/{case_id}/composite/slots",
+        "/api/cases/{case_id}/render/sequence",
+        "/api/cases/{case_id}/export",
+        "/api/archive/import",
+        "/api/model/status",
+        "/api/classifier/status",
+    ):
+        assert path in schema["paths"], path
+    for operations in schema["paths"].values():
+        for operation in operations.values():
+            for status in ("422", "4XX", "5XX"):
+                assert operation["responses"][status]["content"] == {
+                    "application/json": {"schema": error}
+                }
+    events = schema["paths"]["/api/jobs/{job_id}/events"]["get"]["responses"]["200"]
+    assert set(events["content"]) == {"text/event-stream"}
+    stopping = schema["paths"]["/api/system/shutdown"]["post"]["responses"]["202"]
+    assert stopping["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/Stopping"
+    }
+
+
 def test_heartbeat_and_shutdown(ctx: AppContext) -> None:
     clock = FakeClock()
     calls: list[None] = []

@@ -52,6 +52,10 @@ class Health(BaseModel):
     version: str
 
 
+class Stopping(BaseModel):
+    status: Literal["stopping"]
+
+
 class RevealRequest(BaseModel):
     path: str
 
@@ -97,6 +101,8 @@ class CaseSummary(BaseModel):
     id: str
     type: CaseType
     title: str
+    # Relative to the library root, `/`-separated, as on disk: what /system/reveal takes.
+    folder: str
     created_at: datetime
     updated_at: datetime
     photos: int
@@ -106,12 +112,13 @@ class CaseSummary(BaseModel):
     thumbnails: list[str]
 
     @classmethod
-    def of(cls, case: CaseRecord) -> CaseSummary:
+    def of(cls, case: CaseRecord, folder: str) -> CaseSummary:
         states = Counter(p.state for p in case.photos)
         return cls(
             id=case.id,
             type=case.type,
             title=case.title,
+            folder=folder,
             created_at=case.created_at,
             updated_at=case.updated_at,
             photos=len(case.photos),
@@ -129,18 +136,25 @@ class PatientView(BaseModel):
     id: str
     name: str
     note: str | None
+    folder: str  # as CaseSummary.folder
     created_at: datetime
     cases: list[CaseSummary]
 
     @classmethod
     def of(cls, entry: PatientEntry) -> PatientView:
         patient = entry.record
+        # Patient folders sit right under the root, so their name is the relative path.
+        folder = entry.folder.name
         return cls(
             id=patient.id,
             name=patient.name,
             note=patient.note,
+            folder=folder,
             created_at=patient.created_at,
-            cases=[CaseSummary.of(case) for case in entry.cases],
+            cases=[
+                CaseSummary.of(case, f"{folder}/{entry.case_folders[case.id].name}")
+                for case in entry.cases
+            ],
         )
 
 
@@ -192,6 +206,7 @@ class CaseCreate(_Request):
 class CaseView(BaseModel):
     case: CaseRecord
     patient: PatientRecord
+    folder: str  # as CaseSummary.folder; its export files are in `{folder}/export`
     suggested_output_scale: float | None
     flip_defaults: dict[Slot, Flip] | None
 
@@ -200,6 +215,7 @@ class CaseView(BaseModel):
         return cls(
             case=details.case,
             patient=details.patient,
+            folder=details.folder,
             suggested_output_scale=details.suggested_output_scale,
             flip_defaults=details.flip_defaults,
         )

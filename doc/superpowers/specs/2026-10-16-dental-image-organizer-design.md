@@ -865,8 +865,14 @@ send the archive again with the answer.
 | `POST /classifier/teach/{sid}/confirm` | `{slots: {slot: photo_id}, flips: {slot: flip}}` → stores samples and flips, retrains, deletes the session |
 | `DELETE /classifier/teach/{sid}` | Cancel; deletes the session |
 
+Patients (`GET /patients`, `PATCH /patients/{id}`), case summaries, and case views carry a
+`folder`: the folder's path relative to the library root, `/`-separated, under its name on disk.
+`POST /system/reveal` takes it as is, and `{folder}/export` for a case's exports.
+
 TypeScript types for the frontend are generated from the FastAPI OpenAPI schema with
-`openapi-typescript`. CI fails if the generated file is stale.
+`openapi-typescript`. CI fails if the generated file is stale. The schema declares the error
+body of §4.13 for `422`, `4XX`, and `5XX` on every route, and `text/event-stream` for
+`/jobs/{job_id}/events`.
 
 ### 4.13 Errors, logging, and security
 
