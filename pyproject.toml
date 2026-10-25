@@ -48,6 +48,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dental_image_organizer"]
+# The built UI is gitignored, and hatchling skips ignored files unless they are named here.
+artifacts = ["src/dental_image_organizer/web/**"]
 
 [tool.ruff]
 line-length = 100

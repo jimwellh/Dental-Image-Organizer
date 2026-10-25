@@ -975,11 +975,18 @@ dependencies come as prebuilt wheels, so `uv tool install` needs no compiler on 
   - One summary is shown per drop (§3.1).
 - **Manual adjustments** are applied immediately as CSS transforms (`matrix3d`) on the 1600 px
   preview for instant feedback. On release, the edit is committed with `PATCH` and the server re-renders.
+- **Image freshness.** Image URLs carry a `v` query parameter, which the server ignores. It
+  changes whenever the image would change. Browsers reuse an image already loaded in the page for
+  the same URL whatever its `Cache-Control` says (the HTML "list of available images"), so
+  without it a re-rendered photo would keep showing its old pixels.
 - **Heartbeat and server connection.**
   - The heartbeat runs every 30 s, and immediately when the tab becomes visible again
     (`visibilitychange`). Background tabs may be throttled or suspended (Safari), so the server
     can reach its idle shutdown while the tab is still open.
-  - If the server stops answering for 10 s (idle shutdown, Quit, or crash), the UI replaces the
+  - Besides the heartbeat, the UI polls `GET /api/health` every 5 s. The server counts as gone
+    when neither has succeeded for 10 s. Health polls do not count as activity for idle shutdown;
+    only heartbeats do.
+  - If the server is gone (idle shutdown, Quit, or crash), the UI replaces the
     page with a full-screen notice: "Dental Image Organizer has closed. Click its Dock icon to
     reopen." It keeps polling `/api/health` and reloads when the server is back.
   - During an in-app update, the notice reads "Updating…" instead (§7.3).
@@ -995,6 +1002,8 @@ dependencies come as prebuilt wheels, so `uv tool install` needs no compiler on 
   - The proxy therefore sets `changeOrigin: true` (rewrites `Host`) and, in its `proxyReq` hook,
     rewrites `Origin` to `http://127.0.0.1:8765`. The backend keeps a single security policy
     with no development mode to misconfigure.
+  - The dev server is reached at `http://localhost:5173`. Vite binds `localhost`, which resolved
+    to `::1` only on the development host, so `127.0.0.1:5173` refuses connections (measured).
 - `npm run build` outputs to `src/dental_image_organizer/web/`. That folder is gitignored, and
   hatchling includes it as build artifacts.
 - FastAPI serves it as static files with an SPA fallback to `index.html`.
@@ -1020,15 +1029,22 @@ Dental-Image-Organizer/
 ├── src/dental_image_organizer/  # backend package (layout in §4.2)
 ├── frontend/
 │   ├── package.json  vite.config.ts  tsconfig.json
-│   └── src/{api,components,features/{library,procedure,composite,settings},lib,strings}/
+│   ├── dev/proxy.ts             # the dev proxy of §5.4
+│   └── src/
+│       ├── api/                 # openapi.json + schema.d.ts: generated and committed
+│       ├── components/  lib/  strings/
+│       └── features/{shell,intake,export,library,case,procedure,ai,composite,teach,settings}/
 ├── scripts/
 │   ├── install.sh               # end-user installer (macOS)
+│   ├── export_openapi.py        # writes the OpenAPI schema without starting a server
 │   └── export_dinov2_onnx.py    # maintainer-only: export + quantize the embedding model
 ├── tests/
 │   ├── unit/                    # core/, ml/, storage/ (synthetic images generated in conftest)
 │   ├── integration/             # API flows with TestClient + temp library
 │   ├── golden/                  # marked @golden; reads local_fixtures/ (skipped when absent)
-│   └── fixtures/synthetic/      # optional committed CC0 / generated images
+│   └── fixtures/
+│       ├── synthetic/           # optional committed CC0 / generated images
+│       └── transform/cases.json # shared transform fixture, written by tests/support/transform_fixture.py
 ├── local_fixtures/              # gitignored: real, de-identified photos for local tuning only
 └── .github/workflows/
     ├── ci.yml
@@ -1141,7 +1157,8 @@ library folder is kept.
 ### 7.4 Development (Windows host)
 
 - `uv sync` installs the backend; `uv run dio serve --no-browser` runs it.
-- `cd frontend && npm ci && npm run dev` runs the frontend.
+- `cd frontend && npm ci && npm run dev` runs the frontend at `http://localhost:5173` (not
+  `127.0.0.1`: Vite binds `localhost`, which resolved to `::1` only on the development host).
 - The app is fully functional on Windows. The only macOS-only command is `install-launcher`.
   Reveal-in-Explorer is supported for development.
 
@@ -1149,8 +1166,9 @@ library folder is kept.
 
 - **Python:** `ruff check`, `ruff format --check`, `mypy` (strict for `core/`, `ml/`, `storage/`),
   import-linter, and `pytest` on the matrix {ubuntu, windows, macos} × Python 3.12.
-- **Frontend:** `npm ci`, `eslint`, `tsc --noEmit`, `vitest run`, `vite build`, and the OpenAPI
-  types-stale check.
+- **Frontend:** `npm ci`, `eslint`, `tsc --noEmit`, `prettier --check`, `vitest run`,
+  `vite build`, and the OpenAPI types-stale check. It also asserts that the built wheel contains
+  `dental_image_organizer/web/index.html`.
 - **macOS smoke:** the same install, launcher, and health smoke test as in the release workflow,
   run against a freshly built wheel on `macos-latest` (arm64, matching the supported hardware).
 
@@ -1193,6 +1211,9 @@ binary patient data is needed.
   normalized↔pixel round trip, with property-based tests via Hypothesis. A shared JSON fixture is
   used by both pytest and Vitest to guarantee that the frontend and backend matrices agree,
   including the CSS `matrix3d` mapping.
+  - The fixture is generated from `core.transform` (and numpy for the four-point homography,
+    cross-checked against OpenCV). A pytest test fails when it is stale; Vitest checks
+    `transform.ts` against it, including the CSS `matrix3d` mapping.
 - **Classifier and assignment.** Synthetic clustered embeddings must yield correct assignment.
   Also tested:
   - the cold-start fallback ordering;
