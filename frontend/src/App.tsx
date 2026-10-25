@@ -3,6 +3,7 @@ import { useState } from "react";
 import { createQueryClient } from "./api/queries";
 import { describeError } from "./api/http";
 import { Link, useRoute, type Route } from "./lib/router";
+import { LibraryScreen } from "./features/library/LibraryScreen";
 import { Shell } from "./features/shell/Shell";
 import { useNotify } from "./features/shell/notify";
 import { NoticeProvider } from "./features/shell/Notices";
@@ -10,11 +11,11 @@ import { en } from "./strings/en";
 
 const LIBRARY: Route = { name: "library" };
 
-// Placeholders until the screens of Tasks 9-16 replace them.
+// Placeholders until the screens of Tasks 10-16 replace them.
 function Screen({ route }: { route: Route }) {
   switch (route.name) {
     case "library":
-      return <h1 className="text-xl font-semibold">{en.nav.library}</h1>;
+      return <LibraryScreen />;
     case "case":
       return <h1 className="text-xl font-semibold">{en.nav.case}</h1>;
     case "teach":
