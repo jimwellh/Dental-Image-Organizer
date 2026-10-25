@@ -145,6 +145,77 @@ def test_jobs_of_different_keys_run_together(jobs: JobManager) -> None:
     assert jobs.wait(b.id, TIMEOUT).state == "done"
 
 
+def test_jobs_beyond_the_cap_wait_for_a_running_one(executor: ThreadPoolExecutor) -> None:
+    jobs = JobManager(executor, max_running=1)
+    release, started, second_ran = threading.Event(), threading.Event(), threading.Event()
+
+    def blocked(progress: JobProgress) -> None:
+        started.set()
+        assert release.wait(TIMEOUT)
+
+    def second(progress: JobProgress) -> None:
+        second_ran.set()
+
+    a = jobs.submit("demo", blocked, key="c1")
+    assert started.wait(TIMEOUT)
+    b = jobs.submit("demo", second, key="c2")
+
+    # The pool's second worker is idle, but the cap keeps it for work outside the jobs.
+    assert not second_ran.wait(0.3)
+    assert jobs.get(b.id).state == "queued"
+    assert jobs.active("c2")
+    release.set()
+    assert jobs.wait(a.id, TIMEOUT).state == "done"
+    assert jobs.wait(b.id, TIMEOUT).state == "done"
+
+
+def test_a_keys_next_job_queues_behind_jobs_already_waiting_for_a_slot(
+    executor: ThreadPoolExecutor,
+) -> None:
+    jobs = JobManager(executor, max_running=1)
+    release, started = threading.Event(), threading.Event()
+    order: list[str] = []
+
+    def blocked(progress: JobProgress) -> None:
+        started.set()
+        assert release.wait(TIMEOUT)
+
+    def named(name: str) -> Callable[[JobProgress], None]:
+        return lambda progress: order.append(name)
+
+    a = jobs.submit("demo", blocked, key="c1")
+    assert started.wait(TIMEOUT)
+    after_a = jobs.submit("demo", named("c1-second"), key="c1")
+    other = jobs.submit("demo", named("c2"), key="c2")
+    release.set()
+
+    for snapshot in (a, after_a, other):
+        assert jobs.wait(snapshot.id, TIMEOUT).state == "done"
+    assert order == ["c2", "c1-second"]
+
+
+def test_cancel_queued_fails_jobs_waiting_for_a_slot(executor: ThreadPoolExecutor) -> None:
+    jobs = JobManager(executor, max_running=1)
+    release, started = threading.Event(), threading.Event()
+    ran: list[str] = []
+
+    def blocked(progress: JobProgress) -> None:
+        started.set()
+        assert release.wait(TIMEOUT)
+
+    a = jobs.submit("demo", blocked, key="c1")
+    assert started.wait(TIMEOUT)
+    b = jobs.submit("demo", lambda progress: ran.append("c2"), key="c2")
+
+    assert jobs.cancel_queued() == 1
+    assert jobs.get(b.id).error == JobError("cancelled", "The app was closing.")
+    release.set()
+    assert jobs.wait(a.id, TIMEOUT).state == "done"
+    executor.shutdown(wait=True)
+    assert ran == []
+    assert jobs.get(b.id).state == "failed"
+
+
 def test_active_reports_queued_and_running_jobs(jobs: JobManager) -> None:
     release = threading.Event()
     started = threading.Event()

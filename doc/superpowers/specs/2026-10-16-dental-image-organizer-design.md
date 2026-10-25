@@ -323,6 +323,9 @@ by future adapters (OpenClaw, Telegram, CLI).
 - **Concurrency.**
   - CPU-heavy work runs in a `ThreadPoolExecutor` with `max_workers = min(4, os.cpu_count())`.
     OpenCV and onnxruntime release the GIL.
+  - Background jobs hold at most `max_workers − 1` workers at once (at least one); the others wait
+    in submission order. Requests that run on the executor, such as previews and edits, then
+    never wait behind a batch.
   - `cv2.setNumThreads(1)` is set per worker to avoid oversubscription.
   - Writes to a case are serialized by a per-case `threading.Lock`.
 

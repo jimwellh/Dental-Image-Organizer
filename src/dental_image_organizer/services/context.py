@@ -104,7 +104,9 @@ def create_context(
         settings=settings,
         case_locks=CaseLocks(),
         cache=cache,
-        jobs=JobManager(executor, on_finish=evict_after),
+        # One worker stays free of jobs, so requests that run on the executor (renders, edits,
+        # uploads) never wait for a batch to finish.
+        jobs=JobManager(executor, max_running=max(1, workers - 1), on_finish=evict_after),
         ai=AiRuntime(dirs, model_spec, http_client=http_client),
         references=ReferenceCache(),
         executor=executor,

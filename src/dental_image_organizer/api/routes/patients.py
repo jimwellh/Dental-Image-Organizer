@@ -21,7 +21,7 @@ def list_patients(ctx: Ctx) -> PatientsView:
 @router.patch("/patients/{patient_id}")
 def patch_patient(patient_id: str, body: PatientPatch, ctx: Ctx) -> PatientView:
     library = ctx.library()
-    current = library.patient(patient_id).record
+    current = library.patient_record(patient_id)
     # PatientPatch refuses a null name, so None here means the name was not sent.
     name = body.name if body.name is not None else current.name
     note = body.note if "note" in body.model_fields_set else current.note

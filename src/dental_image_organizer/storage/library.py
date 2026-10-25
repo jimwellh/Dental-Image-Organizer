@@ -264,9 +264,15 @@ class Library:
             self._listing = LibraryListing(tuple(patients), tuple(problems))
             return self._listing
 
-    def _fresh(self, path: Path) -> bool:
+    def _indexed(self, path: Path, record_id: str) -> bool:
+        """Whether the cached parse of `path` matches the file and holds `record_id`."""
         cached = self._files.get(path)
-        return cached is not None and cached.sig == _sig(path)
+        return (
+            cached is not None
+            and cached.sig == _sig(path)
+            and cached.record is not None
+            and cached.record.id == record_id
+        )
 
     def _case_dir(self, case_id: str) -> Path:
         # The index is trusted only while the file's signature matches; a folder renamed or
@@ -276,7 +282,7 @@ class Library:
                 if rescan:
                     self._scan()
                 folder = self._case_dirs.get(case_id)
-                if folder is not None and self._fresh(folder / CASE_FILE):
+                if folder is not None and self._indexed(folder / CASE_FILE, case_id):
                     return folder
         raise CaseNotFoundError("This case no longer exists.")
 
@@ -286,9 +292,21 @@ class Library:
                 if rescan:
                     self._scan()
                 folder = self._patient_dirs.get(patient_id)
-                if folder is not None and self._fresh(folder / PATIENT_FILE):
+                if folder is not None and self._indexed(folder / PATIENT_FILE, patient_id):
                     return folder
         raise PatientNotFoundError("This patient no longer exists.")
+
+    def _moved(self, old: Path, new: Path) -> None:
+        """Follow a folder this library renamed: renaming keeps each file's signature, so the
+        index moves along instead of costing the next lookup a scan."""
+        for index, name in ((self._patient_dirs, PATIENT_FILE), (self._case_dirs, CASE_FILE)):
+            for record_id, folder in index.items():
+                if folder == old or folder.parent == old:
+                    moved = new if folder == old else new / folder.name
+                    index[record_id] = moved
+                    parsed = self._files.pop(folder / name, None)
+                    if parsed is not None:
+                        self._files[moved / name] = parsed
 
     def _owner(self, case_dir: Path) -> str | None:
         """The id of the patient whose folder holds `case_dir`. Call it holding the I/O lock."""
@@ -345,12 +363,48 @@ class Library:
 
     # -- patients ------------------------------------------------------------------------
 
-    def patient(self, patient_id: str) -> PatientEntry:
+    def patient_record(self, patient_id: str) -> PatientRecord:
+        """The patient's record from the index; a miss rescans once, like `case_dir`."""
         with self._io:
+            return self._patient_at(self._patient_dir(patient_id))
+
+    def _patient_at(self, folder: Path) -> PatientRecord:
+        # Only after _patient_dir, which checked that this parse matches the file.
+        record = self._files[folder / PATIENT_FILE].record
+        assert isinstance(record, PatientRecord)
+        return record
+
+    def patient(self, patient_id: str) -> PatientEntry:
+        """The patient with its cases, from its own folder; the whole library is scanned only
+        when a case folder there changed in Finder since the last scan."""
+        with self._io:
+            folder = self._patient_dir(patient_id)
+            entry = self._entry_from_index(folder)
+            if entry is not None:
+                return entry
             for entry in self._scan().patients:
                 if entry.record.id == patient_id:
                     return entry
         raise PatientNotFoundError("This patient no longer exists.")
+
+    def _entry_from_index(self, folder: Path) -> PatientEntry | None:
+        """The patient in `folder` with its cases, or None when a case there is not where the
+        index has it. Call it holding the I/O lock."""
+        record = self._patient_at(folder)
+        cases: list[CaseRecord] = []
+        for cdir in _child_dirs(folder)[0]:
+            parsed = self._parse(cdir / CASE_FILE, parse_case, self._files)
+            if parsed is None or parsed.record is None:
+                continue  # not a case folder, or a damaged one, which the listing reports
+            case: CaseRecord = parsed.record
+            indexed = self._case_dirs.get(case.id)
+            if indexed != cdir:
+                if indexed is not None and self._indexed(indexed / CASE_FILE, case.id):
+                    continue  # a copy of a case that lives elsewhere, which the listing reports
+                return None  # moved, copied, or added in Finder: only a scan can tell which
+            cases.append(self._in_folder(case, record.id))
+        cases.sort(key=lambda c: c.created_at, reverse=True)
+        return PatientEntry(record, folder, tuple(cases))
 
     def create_patient(self, name: str, note: str | None) -> PatientRecord:
         display = unicodedata.normalize("NFC", name).strip()
@@ -359,6 +413,7 @@ class Library:
             folder = self._root / self._unique(self._root, base)
             record = PatientRecord(id=new_id(), name=display, note=note, created_at=self._clock())
             self._write(folder / PATIENT_FILE, record, "patient")
+            self._patient_dirs[record.id] = folder
             return record
 
     def update_patient(self, patient_id: str, *, name: str, note: str | None) -> PatientRecord:
@@ -379,6 +434,7 @@ class Library:
                         target = self._unique(self._root, base, exclude=folder)
                     if target != folder.name:
                         self._rename(folder, self._root / target)
+                        self._moved(folder, self._root / target)
                     record = PatientRecord(
                         id=current.id, name=display, note=note, created_at=current.created_at
                     )
@@ -449,6 +505,7 @@ class Library:
                 composite=composite,
             )
             self._write(folder / CASE_FILE, record, "case")
+            self._case_dirs[record.id] = folder
             return record
 
     def staging_dir(self) -> Path:
@@ -559,6 +616,7 @@ class Library:
                 target = self._unique(folder.parent, f"{prefix} {base}", exclude=folder)
                 if target != folder.name:
                     self._rename(folder, folder.parent / target)
+                    self._moved(folder, folder.parent / target)
             return self.update_case(case_id, lambda c: c.model_copy(update={"title": display}))
 
     def trash_case(self, case_id: str) -> Path:

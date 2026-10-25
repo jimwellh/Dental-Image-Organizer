@@ -1,4 +1,5 @@
-"""Changes across both case types: recovery of pending photos at startup (spec §4.3, §4.8)."""
+"""Changes across both case types: recovery of pending photos at startup, and case views that
+stay fast in a large library (spec §4.3, §4.8, §4.11)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from dental_image_organizer.services import cases, composite_case, procedure_cas
 from dental_image_organizer.services.context import AppContext
 from dental_image_organizer.services.intake import add_photos
 from dental_image_organizer.services.jobs import JobProgress
+from dental_image_organizer.storage.library import Library, LibraryListing
 from support.app import ProcedureSet, make_context, procedure_set, upload, view_set, wait
 
 
@@ -63,6 +65,37 @@ def test_photos_left_pending_by_a_quit_are_processed_at_the_next_start(
         assert cases.resume_pending(second) == 0
     finally:
         second.close()
+
+
+def test_case_views_and_changes_never_scan_the_whole_library(
+    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = ctx.library()
+    patients = [library.create_patient(f"Patient {i:03d}", None) for i in range(300)]
+    known = cases.create_case(ctx, "procedure", "implant 16", patient_id=patients[150].id)
+    library.listing()
+    scans: list[None] = []
+    real_scan = Library._scan
+
+    def counting_scan(self: Library) -> LibraryListing:
+        scans.append(None)
+        return real_scan(self)
+
+    monkeypatch.setattr(Library, "_scan", counting_scan)
+
+    assert cases.case_details(ctx, known.id).patient.id == patients[150].id
+    created = cases.create_case(ctx, "procedure", "crown 26", patient_name="New Patient")
+    assert cases.details_of(ctx, created).patient.name == "New Patient"
+    # Renames move the index along with the folders.
+    cases.change_case(ctx, created.id, title="crown 27")
+    cases.update_patient(ctx, created.patient_id, name="Renamed Patient", note=None)
+    details = cases.case_details(ctx, created.id)
+    assert (details.case.title, details.patient.name) == ("crown 27", "Renamed Patient")
+    assert [c.id for c in library.patient(created.patient_id).cases] == [created.id]
+    assert library.case_dir(created.id) == library.root / "Renamed Patient" / (
+        f"{created.created_at:%Y%m%d} crown 27"
+    )
+    assert scans == []
 
 
 def test_a_composite_photo_left_pending_is_processed(ctx: AppContext) -> None:

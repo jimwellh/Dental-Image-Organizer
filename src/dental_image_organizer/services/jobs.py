@@ -1,4 +1,8 @@
-"""Background jobs on a shared executor (spec §4.3): per-key ordering and versioned progress."""
+"""Background jobs on a shared executor (spec §4.3): per-key ordering and versioned progress.
+
+`max_running` caps how many jobs hold a worker at once, so interactive work that shares the
+executor (renders, edits, uploads) always finds a free one.
+"""
 
 from __future__ import annotations
 
@@ -64,10 +68,12 @@ class JobManager:
         executor: Executor,
         *,
         keep_finished: int = 200,
+        max_running: int | None = None,
         on_finish: Callable[[JobSnapshot], None] | None = None,
     ) -> None:
         self._executor = executor
         self._keep_finished = keep_finished
+        self._max_running = max_running
         self._on_finish = on_finish
         # One lock guards every field below; the condition lets `wait` sleep on it.
         self._lock = threading.Lock()
@@ -75,9 +81,13 @@ class JobManager:
         self._jobs: dict[str, JobSnapshot] = {}
         self._fns: dict[str, JobFn] = {}
         self._finished: deque[str] = deque()
-        # Keys with a job handed to the executor; later jobs of the key wait in `_waiting`.
+        # Keys whose turn has come (a job ready or handed to the executor); later jobs of the
+        # key wait in `_waiting`.
         self._busy: set[str] = set()
         self._waiting: dict[str, deque[str]] = {}
+        # Jobs whose key's turn has come, waiting for a free slot of `max_running`, in order.
+        self._ready: deque[str] = deque()
+        self._running = 0  # handed to the executor and not finished yet
         self._closing = False
 
     def submit(
@@ -85,7 +95,7 @@ class JobManager:
     ) -> JobSnapshot:
         job_id = new_id()
         snapshot = JobSnapshot(id=job_id, kind=kind, key=key, state="queued", total=total)
-        start_now = False
+        started: list[str] = []
         with self._lock:
             self._jobs[job_id] = snapshot
             if self._closing:
@@ -94,18 +104,18 @@ class JobManager:
             else:
                 cancelled = None
                 self._fns[job_id] = fn
-                start_now = key is None or key not in self._busy
-                if key is None:
-                    pass
-                elif start_now:
-                    self._busy.add(key)
-                else:
+                if key is not None and key in self._busy:
                     self._waiting.setdefault(key, deque()).append(job_id)
+                else:
+                    if key is not None:
+                        self._busy.add(key)
+                    self._ready.append(job_id)
+                    started = self._take_ready_locked()
         if cancelled is not None:
             self._notify_finished(cancelled)
             return cancelled
-        if start_now:
-            self._dispatch(job_id)
+        for ready_id in started:
+            self._dispatch(ready_id)
         return snapshot
 
     def get(self, job_id: str) -> JobSnapshot:
@@ -162,6 +172,7 @@ class JobManager:
                 if snapshot.state == "queued":
                     cancelled.append(self._fail_locked(job_id, _CANCELLED))
             self._waiting.clear()
+            self._ready.clear()
         for snapshot in cancelled:
             self._notify_finished(snapshot)
         return len(cancelled)
@@ -183,6 +194,15 @@ class JobManager:
         self._finished.append(job_id)
         while len(self._finished) > self._keep_finished:
             self._jobs.pop(self._finished.popleft(), None)
+
+    def _take_ready_locked(self) -> list[str]:
+        """Claim a slot for each ready job that fits under `max_running`, oldest first; the jobs
+        to dispatch. Caller holds the lock."""
+        taken: list[str] = []
+        while self._ready and (self._max_running is None or self._running < self._max_running):
+            taken.append(self._ready.popleft())
+            self._running += 1
+        return taken
 
     def _fail_locked(self, job_id: str, error: JobError) -> JobSnapshot:
         # Caller holds the lock.
@@ -269,18 +289,22 @@ class JobManager:
             final = replace(snapshot, version=snapshot.version + 1, **outcome)
         # Hooks run before the job is published as finished, so a waiter sees their effects.
         self._notify_finished(final)
-        next_id: str | None = None
+        started: list[str] = []
         with self._lock:
             self._jobs[job_id] = final
             self._remember_finished(job_id)
+            self._running -= 1
             if final.key is not None:
                 queue = self._waiting.get(final.key)
                 if queue and not self._closing:
-                    next_id = queue.popleft()
+                    # Behind the jobs of other keys that are ready already.
+                    self._ready.append(queue.popleft())
                 else:
                     self._waiting.pop(final.key, None)
                     self._busy.discard(final.key)
+            if not self._closing:
+                started = self._take_ready_locked()
             self._changed.notify_all()
         # Handing over instead of blocking keeps a worker from idling for its key's turn.
-        if next_id is not None:
-            self._dispatch(next_id)
+        for ready_id in started:
+            self._dispatch(ready_id)

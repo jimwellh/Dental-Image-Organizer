@@ -368,6 +368,29 @@ def test_idle_shutdown_runs_from_the_lifespan(
         assert len(calls) == 1
 
 
+def test_cpu_work_runs_while_jobs_hold_every_job_slot(ctx: AppContext) -> None:
+    release, started = threading.Event(), threading.Event()
+
+    def hold(progress: JobProgress) -> None:
+        started.set()
+        release.wait(WAIT_SECONDS)
+
+    # More jobs than the executor has workers, as when several cases process at once.
+    held = [ctx.jobs.submit("hold", hold, key=f"case-{i}") for i in range(3)]
+    try:
+        assert started.wait(WAIT_SECONDS)
+
+        async def handler() -> int:
+            return await asyncio.wait_for(run_cpu(ctx, lambda: 42), timeout=10)
+
+        assert asyncio.run(handler()) == 42
+        assert ctx.jobs.get(held[-1].id).state == "queued"
+    finally:
+        release.set()
+    for job in held:
+        assert ctx.jobs.wait(job.id, WAIT_SECONDS).state == "done"
+
+
 def test_cpu_work_keeps_the_log_context(ctx: AppContext) -> None:
     def work(a: int, *, b: int) -> tuple[str, dict[str, Any], int]:
         return threading.current_thread().name, structlog.contextvars.get_contextvars(), a + b

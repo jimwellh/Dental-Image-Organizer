@@ -136,7 +136,7 @@ def start_patient_export(
     conflict: ConflictMode,
 ) -> str:
     """Queue the export of every case of a patient (§3.4); the job id."""
-    ctx.library().patient(patient_id)
+    ctx.library().patient_record(patient_id)
     if include is not None and not include:
         raise InvalidRequestError(_EMPTY_MESSAGE)
     wanted = tuple(include) if include is not None else None
@@ -221,7 +221,7 @@ def export_case(
         source = _Source(
             ctx=ctx,
             case=case,
-            patient=library.patient(case.patient_id).record.name,
+            patient=library.patient_record(case.patient_id).name,
             today=today or local_now().date(),
             folder=library.export_dir(case_id),
             settings=ctx.settings.get(),
@@ -528,12 +528,12 @@ def export_zip(
     if case_id is not None and patient_id is None:
         result = _finished(ctx, job_id, "export", case_id)
         case = library.read_case(case_id)
-        patient = library.patient(case.patient_id).record
+        patient = library.patient_record(case.patient_id)
         members = _members(library, result, None)
         name = case_export_zip_name(patient.name, case.title, today)
     elif patient_id is not None and case_id is None:
         result = _finished(ctx, job_id, "export_patient", patient_export_key(patient_id))
-        patient = library.patient(patient_id).record
+        patient = library.patient_record(patient_id)
         members = []
         for exported in result["cases"]:
             try:

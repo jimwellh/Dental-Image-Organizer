@@ -242,7 +242,7 @@ def _install(
     write_atomic(staging / CASE_FILE, dump(record))
     adopted: str | None = None
     try:
-        library.patient(patient.id)
+        library.patient_record(patient.id)
     except PatientNotFoundError:
         entry = library.adopt_patient(patient)
         # adopt_patient hands back the existing entry when another import won the race, and

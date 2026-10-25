@@ -36,8 +36,9 @@ Ctx = Annotated[AppContext, Depends(context)]
 
 
 async def run_cpu[T](ctx: AppContext, fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
-    # The executor holds WORKERS threads, shared with the jobs; Starlette's own thread pool is
-    # not bounded by it. The copied context carries the bound case_id and photo_id along.
+    # The executor holds WORKERS threads, shared with the jobs, which leave one of them free;
+    # Starlette's own thread pool is not bounded by it. The copied context carries the bound
+    # case_id and photo_id along.
     call = functools.partial(contextvars.copy_context().run, fn, *args, **kwargs)
     return await asyncio.get_running_loop().run_in_executor(ctx.executor, call)
 

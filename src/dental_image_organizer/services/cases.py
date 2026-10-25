@@ -93,7 +93,7 @@ def case_details(ctx: AppContext, case_id: str) -> CaseDetails:
 
 def details_of(ctx: AppContext, case: CaseRecord) -> CaseDetails:
     """What the case screen shows besides the record, for a case as read or as just changed."""
-    patient = ctx.library().patient(case.patient_id).record
+    patient = ctx.library().patient_record(case.patient_id)
     if case.type == "composite":
         return CaseDetails(case, patient, None, composite_case.composite_flips(ctx))
     return CaseDetails(case, patient, procedure_case.suggested_output_scale(case), None)

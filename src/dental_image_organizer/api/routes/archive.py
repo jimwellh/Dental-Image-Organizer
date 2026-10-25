@@ -65,7 +65,7 @@ def _write(ctx: AppContext, case_id: str) -> tuple[Path, str]:
             # The archive copies case.json as it is on disk, so a case moved to another patient
             # in Finder is saved first: its patient id must match the folder's patient.json.
             case = library.sync_case_patient(case_id)
-            patient = library.patient(case.patient_id).record
+            patient = library.patient_record(case.patient_id)
             name = case_archive_name(patient.name, case.title, case.created_at.date())
             try:
                 out.parent.mkdir(parents=True, exist_ok=True)
