@@ -137,6 +137,19 @@ def recorded(dirs: AppDirs) -> InstanceInfo:
     return info
 
 
+def logged_events(dirs: AppDirs) -> list[str]:
+    lines = dirs.log_file.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line)["event"] for line in lines]
+
+
+def running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def test_detached_server_starts_answers_and_quits(dirs: AppDirs) -> None:
     port = free_port()
 
@@ -149,12 +162,27 @@ def test_detached_server_starts_answers_and_quits(dirs: AppDirs) -> None:
         assert http.post("/api/system/shutdown").status_code == 202
     assert wait_until(lambda: refuses(port), STOP_TIMEOUT_S)
     assert wait_until(lambda: library_free(dirs), STOP_TIMEOUT_S)
-    lines = dirs.log_file.read_text(encoding="utf-8").splitlines()
-    events = [json.loads(line)["event"] for line in lines]
+    events = logged_events(dirs)
     # The app's own events and uvicorn's stdlib records, both as JSON lines.
     assert "server_started" in events
     assert "Application startup complete." in events
     assert "server_stopped" in events
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="os.kill on Windows ends a process at once, like SIGKILL"
+)
+def test_sigterm_drains_the_server_and_releases_the_library(dirs: AppDirs) -> None:
+    # macOS sends SIGTERM at logout and from Activity Monitor's Quit.
+    start("--port", str(free_port()))
+    # Written by the server itself (os.getpid), so it is the server's pid on every platform.
+    pid = recorded(dirs).pid
+
+    os.kill(pid, signal.SIGTERM)
+
+    assert wait_until(lambda: not running(pid), STOP_TIMEOUT_S)
+    assert "server_stopped" in logged_events(dirs)
+    assert library_free(dirs)
 
 
 def test_a_second_launch_opens_the_running_server(dirs: AppDirs) -> None:

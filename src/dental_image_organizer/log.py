@@ -9,13 +9,16 @@ from pathlib import Path
 from types import TracebackType
 
 import structlog
-from structlog.typing import ExcInfo, Processor
+from structlog.typing import EventDict, ExcInfo, Processor
 
 # structlog names each stdlib logger after its module, so this is the parent of the app's own.
 APP_LOGGER = "dental_image_organizer"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUPS = 4
+WITHHELD_MESSAGE = "message withheld: it held a traceback, which carries exception messages"
 
+# Also matches "Exception Group Traceback (most recent call last):".
+_TRACEBACK = "Traceback (most recent call last):"
 _CAUSE = "The above exception was the direct cause of the following exception:"
 _CONTEXT = "During handling of the above exception, another exception occurred:"
 
@@ -86,8 +89,22 @@ def _formatter(shared: list[Processor], renderer: Processor) -> logging.Formatte
             renderer,
         ],
         # Records from the stdlib loggers, such as uvicorn's, get the same fields.
-        foreign_pre_chain=shared,
+        foreign_pre_chain=[*shared, _withhold_tracebacks],
     )
+
+
+def _withhold_tracebacks(_logger: object, _name: str, event_dict: EventDict) -> EventDict:
+    """A stdlib record whose message holds a traceback loses that message.
+
+    Starlette reports a failed lifespan as `traceback.format_exc()` text, which uvicorn logs as
+    a plain message: the exception messages and source lines in it would bypass
+    `format_exception_safely`. A stack is dropped for the same reason.
+    """
+    event_dict.pop("stack_info", None)
+    if _TRACEBACK in str(event_dict.get("event", "")):
+        event_dict["event"] = WITHHELD_MESSAGE
+        event_dict["logger"] = event_dict["_record"].name
+    return event_dict
 
 
 def format_exception_safely(exc_info: ExcInfo) -> str:

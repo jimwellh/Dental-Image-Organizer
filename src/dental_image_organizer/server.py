@@ -6,12 +6,13 @@ from __future__ import annotations
 import contextlib
 import os
 import secrets
+import signal
 import socket
 import subprocess
 import sys
 import time
 import webbrowser
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import httpx
@@ -237,9 +238,24 @@ def _serve_locked(dirs: AppDirs, *, port: int | None, open_browser: bool) -> int
                 open_ui(bound)
             log.info("server_started", port=bound, version=__version__)
             # uvicorn re-raises Ctrl+C after its graceful shutdown; here it is the normal way out.
-            with contextlib.suppress(KeyboardInterrupt):
+            with _sigterm_as_interrupt(), contextlib.suppress(KeyboardInterrupt):
                 server.run(sockets=[sock])
     finally:
         ctx.close()
     log.info("server_stopped")
     return 0
+
+
+@contextlib.contextmanager
+def _sigterm_as_interrupt() -> Iterator[None]:
+    """Let SIGTERM (logout, Activity Monitor's Quit) unwind like Ctrl+C.
+
+    uvicorn shuts down gracefully on SIGTERM, then restores the handler it found and raises the
+    signal again. The default handler would end the process inside `run`, before the running
+    jobs drain and the library lock is released; this one raises KeyboardInterrupt instead.
+    """
+    previous = signal.signal(signal.SIGTERM, signal.default_int_handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)

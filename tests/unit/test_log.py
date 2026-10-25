@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import sys
+import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 import pytest
 import structlog
 
-from dental_image_organizer.log import configure_logging
+from dental_image_organizer.log import WITHHELD_MESSAGE, configure_logging
 
 # Built at runtime so the name is only a value, never part of a source line in a trace.
 PATIENT = " ".join(["Alex", "Wang"])
@@ -190,3 +191,28 @@ def test_debug_logs_only_the_apps_own_events(
     events = [record["event"] for record in records(log_file)]
     assert "aligned" in events
     assert not any("Artist" in event for event in events)
+
+
+def test_tracebacks_in_stdlib_messages_are_withheld(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Starlette reports a failed lifespan as traceback text, which uvicorn logs as the message.
+    log_file = file_logging(tmp_path, monkeypatch)
+    try:
+        raise_chained_os_error()
+    except RuntimeError:
+        text = traceback.format_exc()
+    assert PATIENT in text
+
+    logging.getLogger("uvicorn.error").error(text)
+    logging.getLogger("uvicorn.error").info("with a stack", stack_info=True)
+
+    withheld, stacked = records(log_file)[-2:]
+    assert withheld["event"] == WITHHELD_MESSAGE
+    assert withheld["level"] == "error"
+    assert withheld["logger"] == "uvicorn.error"
+    assert stacked["event"] == "with a stack"
+    assert "stack_info" not in stacked
+    for output in (log_file.read_text(encoding="utf-8"), stderr_text()):
+        assert PATIENT not in output
+        assert "Stack (most recent call last)" not in output

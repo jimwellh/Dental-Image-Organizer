@@ -1,3 +1,4 @@
+import signal
 import socket
 from pathlib import Path
 
@@ -117,3 +118,14 @@ def test_serve_refuses_a_privileged_port() -> None:
     result = CliRunner().invoke(app, ["serve", "--port", "80", "--no-browser"])
 
     assert result.exit_code == 2
+
+
+def test_sigterm_unwinds_like_ctrl_c_only_while_serving() -> None:
+    # The process test sends a real SIGTERM (POSIX only); this pins that the handler is put
+    # back, so an in-process caller keeps its own.
+    before = signal.getsignal(signal.SIGTERM)
+
+    with server._sigterm_as_interrupt():
+        assert signal.getsignal(signal.SIGTERM) is signal.default_int_handler
+
+    assert signal.getsignal(signal.SIGTERM) == before
