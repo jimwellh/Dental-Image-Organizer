@@ -18,7 +18,10 @@ import type {
 // Builders for the server's records. Each default is valid for the generated types; a test
 // overrides only the fields it is about.
 
-const CREATED_AT = "2026-10-16T10:00:00";
+// The backend stores record times as aware datetimes, but a photo's `captured_at` is the camera's
+// wall-clock time and has no zone.
+const CREATED_AT = "2026-10-16T10:00:00Z";
+const CAPTURED_AT = "2026-10-16T10:00:00";
 
 // The backend's `SLOTS` order, which is also the default shooting order.
 const SLOTS: Slot[] = [
@@ -44,7 +47,8 @@ export function editRecord(overrides: Partial<EditRecord> = {}): EditRecord {
     algorithm_version: "align-1",
     color: { method: "identity", params: {} },
     confidence: 1,
-    flip: "none",
+    // A procedure case refuses a flip on any photo; composite members set it.
+    flip: null,
     model: "similarity",
     output_size: [4032, 3024],
     source: "auto",
@@ -63,17 +67,30 @@ export function photoRecord(overrides: Partial<PhotoRecord> = {}): PhotoRecord {
     stage: "intra_op",
     stage_source: "auto",
     slot: null,
-    file: `photos/${photoId}.jpg`,
+    // The backend's `ORIGINAL_FILE_PATTERN`: a fixed-width hex name under `originals/`.
+    file: `originals/${photoId.slice(-16)}.jpg`,
     sha256: photoId.repeat(2),
     source_name: `IMG_${photoId.slice(-4)}.HEIC`,
     width: 4032,
     height: 3024,
-    captured_at: CREATED_AT,
+    captured_at: CAPTURED_AT,
     captured_at_source: "exif",
     error: null,
     edit: editRecord(),
     ...overrides,
   };
+}
+
+// A composite case holds only members, and a member has no stage; `compositeView` tests use this
+// instead of `photoRecord`. A placed member carries a flip, as the backend writes one per cell.
+export function memberRecord(overrides: Partial<PhotoRecord> = {}): PhotoRecord {
+  const slot = overrides.slot ?? null;
+  return photoRecord({
+    role: "member",
+    stage: null,
+    edit: editRecord({ flip: slot === null ? null : "none" }),
+    ...overrides,
+  });
 }
 
 function patientRecord(overrides: Partial<PatientRecord> = {}): PatientRecord {
@@ -110,7 +127,7 @@ export function procedureView(photos: PhotoRecord[], overrides: CaseViewOverride
       type: "procedure",
       created_at: CREATED_AT,
       updated_at: CREATED_AT,
-      output_scale: null,
+      output_scale: 1,
       photos,
       exports: [],
       sequence: { photo_ids: [], gap_px: 0 },
