@@ -17,8 +17,8 @@ function Wired() {
   return (
     <DropZone
       label="Photos"
-      onFiles={(files) => {
-        void upload(files);
+      onFiles={(files, unreadable) => {
+        void upload(files, unreadable);
       }}
     />
   );
@@ -62,12 +62,38 @@ describe("DropZone", () => {
     expect(input).not.toBeNull();
     await userEvent.upload(input as HTMLInputElement, files);
 
-    expect(onFiles).toHaveBeenCalledWith(files);
+    expect(onFiles).toHaveBeenCalledWith(files, []);
     expect(screen.getByRole("button", { name: en.intake.chooseFiles })).toBeInTheDocument();
     expect(screen.getByText(en.intake.photosHelp)).toBeInTheDocument();
   });
 
-  it("tells the user when a drop cannot be read", async () => {
+  it("passes the readable files on with the unreadable ones, without an alert", async () => {
+    const onFiles = vi.fn();
+    renderWithClient(<DropZone label="Photos" onFiles={onFiles} />);
+    const broken = {
+      isFile: true,
+      isDirectory: false,
+      name: "bad.HEIC",
+      file: (_ok: unknown, fail: (error: Error) => void) => {
+        fail(new Error("gone"));
+      },
+    } as unknown as FileSystemFileEntry;
+    const good = fakeFile("good.HEIC");
+
+    fireEvent.drop(screen.getByRole("region", { name: "Photos" }), {
+      dataTransfer: fakeTransfer([broken, fileEntry(good)]),
+    });
+
+    await waitFor(() => {
+      expect(onFiles).toHaveBeenCalledWith(
+        [good],
+        [{ name: "bad.HEIC", message: en.intake.unreadable }],
+      );
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("tells the user when nothing in a drop can be read", async () => {
     const onFiles = vi.fn();
     renderWithClient(<DropZone label="Photos" onFiles={onFiles} />);
     const broken = {

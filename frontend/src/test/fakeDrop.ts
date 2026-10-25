@@ -39,12 +39,16 @@ export function fakeTransfer(
   entries: FileSystemEntry[],
   files: File[] = [],
 ): Pick<DataTransfer, "items" | "files"> {
-  const items = entries.map((entry) => ({ kind: "file", webkitGetAsEntry: () => entry }));
+  const items = entries.map((entry) => ({
+    kind: "file",
+    webkitGetAsEntry: () => entry,
+    getAsFile: () => null,
+  }));
   return { items, files } as unknown as Pick<DataTransfer, "items" | "files">;
 }
 
-/** A transfer from a browser that gives no entries, only the flat file list. */
+/** A transfer from a browser without the entry API: only the flat file list is usable. */
 export function fakeFlatTransfer(files: File[]): Pick<DataTransfer, "items" | "files"> {
-  const items = files.map(() => ({ kind: "file", webkitGetAsEntry: () => null }));
+  const items = files.map(() => ({ kind: "file" }));
   return { items, files } as unknown as Pick<DataTransfer, "items" | "files">;
 }

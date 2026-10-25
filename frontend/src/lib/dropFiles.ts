@@ -23,40 +23,73 @@ const readFile = (entry: FileSystemFileEntry): Promise<File> =>
     entry.file(resolve, reject);
   });
 
-async function walk(entry: FileSystemEntry, into: File[]): Promise<void> {
-  if (entry.isFile) {
-    into.push(await readFile(entry as FileSystemFileEntry));
-    return;
-  }
-  if (!entry.isDirectory) return;
-  const reader = (entry as FileSystemDirectoryEntry).createReader();
-  // Chrome hands out at most 100 entries per call; an empty batch marks the end.
-  for (let batch = await readEntries(reader); batch.length > 0; batch = await readEntries(reader)) {
-    for (const child of batch) await walk(child, into);
+/** An entry of a drop that the browser could not read; the rest of the drop still goes on. */
+export interface UnreadableEntry {
+  name: string;
+  message: string;
+}
+
+export interface DroppedFiles {
+  files: File[];
+  unreadable: UnreadableEntry[];
+}
+
+/** One file or folder that failed to read costs only itself (batch isolation, §4.13). */
+async function walk(entry: FileSystemEntry, found: DroppedFiles): Promise<void> {
+  try {
+    if (entry.isFile) {
+      found.files.push(await readFile(entry as FileSystemFileEntry));
+    } else if (entry.isDirectory) {
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      // Chrome hands out at most 100 entries per call; an empty batch marks the end.
+      for (
+        let batch = await readEntries(reader);
+        batch.length > 0;
+        batch = await readEntries(reader)
+      ) {
+        for (const child of batch) await walk(child, found);
+      }
+    }
+  } catch {
+    // Files of this folder read before the failure are kept.
+    found.unreadable.push({ name: entry.name, message: en.intake.unreadable });
   }
 }
 
-/**
- * Every file of a drop, folders included. A failure to read any entry rejects: the caller tells
- * the user, rather than uploading a folder that is quietly incomplete.
- */
+type Source = { entry: FileSystemEntry } | { file: File };
+
+/** Every readable file of a drop, folders included, and the entries that could not be read. */
 export async function filesFromDrop(
   transfer: Pick<DataTransfer, "items" | "files">,
-): Promise<File[]> {
-  // Both are read before the first `await`: the browser empties a `DataTransfer` as soon as the
-  // drop handler returns.
-  const entries: FileSystemEntry[] = [];
-  for (const item of Array.from(transfer.items)) {
-    if (item.kind !== "file") continue;
-    const entry = item.webkitGetAsEntry();
-    if (entry) entries.push(entry);
-  }
+): Promise<DroppedFiles> {
+  // Everything is taken from the transfer before the first `await`: the browser empties a
+  // `DataTransfer` as soon as the drop handler returns.
+  const items = Array.from(transfer.items).filter((item) => item.kind === "file");
   const flat = Array.from(transfer.files);
+  const hasEntries = items.some(
+    (item) => typeof (item as Partial<DataTransferItem>).webkitGetAsEntry === "function",
+  );
+  // A browser without the entry API only has the flat list.
+  if (!hasEntries) return { files: flat, unreadable: [] };
 
-  if (entries.length === 0) return flat;
-  const files: File[] = [];
-  for (const entry of entries) await walk(entry, files);
-  return files;
+  const sources: Source[] = [];
+  for (const item of items) {
+    const entry = item.webkitGetAsEntry();
+    if (entry) {
+      sources.push({ entry });
+      continue;
+    }
+    // Some sources (Photos.app file promises) give no entry but still give the file.
+    const file = item.getAsFile();
+    if (file) sources.push({ file });
+  }
+
+  const found: DroppedFiles = { files: [], unreadable: [] };
+  for (const source of sources) {
+    if ("file" in source) found.files.push(source.file);
+    else await walk(source.entry, found);
+  }
+  return found;
 }
 
 /**

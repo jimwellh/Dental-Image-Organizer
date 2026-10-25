@@ -16,9 +16,10 @@ describe("filesFromDrop", () => {
     const nested = directoryEntry("nested", [[fileEntry(fakeFile("deep.JPG"))]]);
     const folder = directoryEntry("Finder folder", [first, [...second, nested]]);
 
-    const files = await filesFromDrop(fakeTransfer([folder]));
+    const { files, unreadable } = await filesFromDrop(fakeTransfer([folder]));
     const names = files.map((f) => f.name);
 
+    expect(unreadable).toEqual([]);
     expect(files).toHaveLength(104);
     expect(names).toContain("a99.HEIC");
     expect(names).toContain("b2.HEIC");
@@ -39,7 +40,7 @@ describe("filesFromDrop", () => {
     const pending = filesFromDrop(transfer);
     // No microtask has run yet: the browser empties the transfer once the handler returns.
     expect(asked).toEqual([0, 1, 2]);
-    expect(await pending).toHaveLength(3);
+    expect((await pending).files).toHaveLength(3);
   });
 
   it("falls back to the file list without entries", async () => {
@@ -47,22 +48,59 @@ describe("filesFromDrop", () => {
 
     const result = await filesFromDrop(fakeFlatTransfer(files));
 
-    expect(result.map((f) => f.name)).toEqual(["one.HEIC", "two.JPG"]);
+    expect(result.files.map((f) => f.name)).toEqual(["one.HEIC", "two.JPG"]);
   });
 
-  it("rejects when a folder cannot be read", async () => {
-    const broken = {
+  it("keeps the readable files when one entry cannot be read", async () => {
+    const good = fileEntry(fakeFile("good.HEIC"));
+    const brokenFile = {
+      isFile: true,
+      isDirectory: false,
+      name: "bad.HEIC",
+      file: (_ok: unknown, fail: (error: Error) => void) => {
+        fail(new Error("gone"));
+      },
+    } as unknown as FileSystemFileEntry;
+    const brokenFolder = {
       isFile: false,
       isDirectory: true,
-      name: "broken",
+      name: "broken folder",
       createReader: () => ({
         readEntries: (_ok: unknown, fail: (error: Error) => void) => {
           fail(new Error("unreadable"));
         },
       }),
     } as unknown as FileSystemDirectoryEntry;
+    const partial = directoryEntry("half", [[fileEntry(fakeFile("kept.JPG"))]]);
 
-    await expect(filesFromDrop(fakeTransfer([broken]))).rejects.toThrow("unreadable");
+    const { files, unreadable } = await filesFromDrop(
+      fakeTransfer([brokenFile, good, brokenFolder, partial]),
+    );
+
+    expect(files.map((f) => f.name)).toEqual(["good.HEIC", "kept.JPG"]);
+    expect(unreadable).toEqual([
+      { name: "bad.HEIC", message: en.intake.unreadable },
+      { name: "broken folder", message: en.intake.unreadable },
+    ]);
+  });
+
+  it("keeps items without an entry in a mixed drop", async () => {
+    const promised = fakeFile("promised.HEIC");
+    const items = [
+      {
+        kind: "file",
+        webkitGetAsEntry: () => fileEntry(fakeFile("with-entry.HEIC")),
+        getAsFile: () => null,
+      },
+      { kind: "file", webkitGetAsEntry: () => null, getAsFile: () => promised },
+      { kind: "file", webkitGetAsEntry: () => null, getAsFile: () => null },
+      { kind: "string", webkitGetAsEntry: () => null, getAsFile: () => null },
+    ];
+    const transfer = { items, files: [] } as unknown as Pick<DataTransfer, "items" | "files">;
+
+    const { files } = await filesFromDrop(transfer);
+
+    expect(files.map((f) => f.name)).toEqual(["with-entry.HEIC", "promised.HEIC"]);
   });
 });
 

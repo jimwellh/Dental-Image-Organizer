@@ -1,6 +1,6 @@
 import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { Button } from "../../components/Button";
-import { filesFromDrop } from "../../lib/dropFiles";
+import { filesFromDrop, type UnreadableEntry } from "../../lib/dropFiles";
 import { en } from "../../strings/en";
 import { useNotify } from "../shell/notify";
 
@@ -11,7 +11,8 @@ interface DropZoneProps {
   disabled?: boolean;
   /** Text shown instead of the prompt while work is under way; the zone ignores input then. */
   busy?: string | null;
-  onFiles: (files: File[]) => void;
+  /** `unreadable` lists dropped entries the browser could not read; the rest still arrive. */
+  onFiles: (files: File[], unreadable: readonly UnreadableEntry[]) => void;
 }
 
 export function DropZone({
@@ -27,9 +28,11 @@ export function DropZone({
   const [dragging, setDragging] = useState(false);
   const inactive = disabled || busy !== null;
 
-  const deliver = (files: File[]) => {
+  const deliver = (files: File[], unreadable: readonly UnreadableEntry[] = []) => {
     const chosen = multiple ? files : files.slice(0, 1);
-    if (chosen.length > 0) onFiles(chosen);
+    if (chosen.length > 0) onFiles(chosen, unreadable);
+    // A partly readable drop is reported by the owner of the drop's single notice.
+    else if (unreadable.length > 0) notify({ kind: "error", lines: [en.intake.readFailed] });
   };
 
   const onDragOver = (event: DragEvent<HTMLElement>) => {
@@ -50,9 +53,14 @@ export function DropZone({
     setDragging(false);
     if (inactive) return;
     // `filesFromDrop` reads the transfer synchronously before it awaits anything.
-    filesFromDrop(event.dataTransfer).then(deliver, () => {
-      notify({ kind: "error", lines: [en.intake.readFailed] });
-    });
+    filesFromDrop(event.dataTransfer).then(
+      ({ files, unreadable }) => {
+        deliver(files, unreadable);
+      },
+      () => {
+        notify({ kind: "error", lines: [en.intake.readFailed] });
+      },
+    );
   };
 
   const onChoose = (event: ChangeEvent<HTMLInputElement>) => {

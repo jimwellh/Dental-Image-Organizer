@@ -27,6 +27,7 @@ export const en = {
     photosHelp:
       "Dragging from Photos.app does not work? In Photos, choose File → Export, then drop the exported folder.",
     readFailed: "Could not read the dropped files; try again or use Choose files.",
+    unreadable: "could not be read",
     uploading: "Uploading",
   },
   skip: {
