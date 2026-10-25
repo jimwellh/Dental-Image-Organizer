@@ -10,6 +10,7 @@ import structlog
 
 from dental_image_organizer.core.imageio import DecodedImage, decode, read_capture_time
 from dental_image_organizer.core.naming import unique_name
+from dental_image_organizer.errors import DioError
 
 log = structlog.get_logger(__name__)
 
@@ -38,6 +39,13 @@ def os_error_message(exc: OSError) -> str:
 def unexpected_message(exc: Exception) -> str:
     detail = str(exc).strip()
     return f"Unexpected {type(exc).__name__}" + (f": {detail}" if detail else "")
+
+
+def failure_message(exc: Exception) -> str:
+    """The message reported for a photo that failed; the caller logs the trace."""
+    if isinstance(exc, DioError):
+        return str(exc)
+    return os_error_message(exc) if isinstance(exc, OSError) else unexpected_message(exc)
 
 
 def capture_time(image: DecodedImage, path: Path) -> tuple[datetime, bool]:

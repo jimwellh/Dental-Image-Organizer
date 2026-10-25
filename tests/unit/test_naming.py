@@ -107,3 +107,22 @@ def test_unique_name_treats_nfd_and_nfc_as_the_same_file() -> None:
     assert naming.unique_name(unicodedata.normalize("NFC", "王小明_é.jpg"), taken) == (
         unicodedata.normalize("NFC", "王小明_é_2.jpg")
     )
+
+
+def test_case_zip_names() -> None:
+    assert (
+        naming.case_export_zip_name("Alex Wang", "implant 16", date(2026, 10, 16))
+        == "Alex Wang_implant 16_Export_20261016.zip"
+    )
+    assert (
+        naming.case_archive_name("Alex Wang", "implant 16", date(2026, 10, 16))
+        == "Alex Wang_implant 16_Archive_20261016.zip"
+    )
+
+
+def test_case_zip_names_trim_the_title_and_keep_the_patient() -> None:
+    for build in (naming.case_export_zip_name, naming.case_archive_name):
+        name = build("Alex Wang", "t" * 300, date(2026, 10, 16))
+        assert len(name.encode()) <= naming.MAX_FILENAME_BYTES
+        assert name.startswith("Alex Wang_t")
+        assert name.endswith("_20261016.zip")

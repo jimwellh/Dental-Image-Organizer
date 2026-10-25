@@ -20,6 +20,7 @@ from dental_image_organizer.cli import app
 from dental_image_organizer.core.geometry import flip_pixels
 from dental_image_organizer.core.slots import DEFAULT_FLIPS, GROUPS, SLOTS
 from dental_image_organizer.errors import ModelUnavailableError
+from dental_image_organizer.instance import InstanceLock
 from dental_image_organizer.ml.classifier import SlotClassifier
 from dental_image_organizer.ml.embedder import EMBEDDING_DIM, Embedder
 from dental_image_organizer.ml.model_store import ModelSpec
@@ -330,6 +331,29 @@ def test_learning_without_the_model_is_an_error_before_writing(
     assert result.exit_code == 1, result.output
     assert "--download-model" in result.output
     assert not (tmp_path / "out").exists()
+
+
+def test_learning_refuses_while_the_app_runs(
+    set_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_model(tmp_path, monkeypatch)
+    lock = InstanceLock(paths.app_dirs().instance_lock)
+    assert lock.try_acquire()
+    try:
+        refused = _invoke(set_dir, tmp_path / "out", "--learn")
+        # A run that does not learn leaves the classifier alone, so it needs no lock.
+        unlearned = _invoke(set_dir, tmp_path / "plain")
+    finally:
+        lock.release()
+
+    assert refused.exit_code == 1, refused.output
+    assert (
+        "error: Dental Image Organizer is running; teach from the app, or quit it first."
+        in refused.output
+    )
+    assert not (tmp_path / "out").exists()
+    assert not paths.classifier_dir().exists()
+    assert unlearned.exit_code == 0, unlearned.output
 
 
 def test_three_learned_sets_train_the_classifier(

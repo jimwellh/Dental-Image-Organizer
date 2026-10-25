@@ -4,7 +4,8 @@ Automated alignment, color matching, and collage generation for clinical intraor
 It runs locally on the dentist's Mac.
 
 > **Status: early development.** The procedure and composite pipelines are available as
-> command-line tools (`dio process`, `dio composite`); the app UI is not built yet. See the
+> command-line tools (`dio process`, `dio composite`), and the local server API as `dio serve`;
+> the app UI is not built yet. See the
 > [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
 
 ## What it does
@@ -88,6 +89,39 @@ uv run pytest            # tests; golden tests run only when local_fixtures/ exi
 uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports
 ```
 
+Run the local server. It listens on `127.0.0.1` only, on port 8765 or the next free one up to
+8775, and a restart keeps the last run's port:
+
+```sh
+uv run dio serve --no-browser   # Ctrl+C stops it; -v logs debug details
+```
+
+The API's schema is at `http://127.0.0.1:8765/api/openapi.json`. State-changing requests need
+an `Origin` header naming the server, for example:
+
+```sh
+curl -s http://127.0.0.1:8765/api/health
+curl -s -X POST -H "Origin: http://127.0.0.1:8765" http://127.0.0.1:8765/api/system/shutdown
+```
+
+`dio serve --detach`, for the macOS launcher, starts the server in the background and returns
+once it answers. The server logs JSON lines to `dio.log` in the app's log folder (on macOS,
+`~/Library/Logs/DentalImageOrganizer`).
+
+To work with a throw-away set of app folders instead of your own, set `DIO_APP_DIR`. Settings,
+data, cache, and logs then go to its `config`, `data`, `cache`, and `log` subfolders, and the
+default library to its `library` subfolder:
+
+```sh
+DIO_APP_DIR=/tmp/dio uv run dio serve --no-browser
+```
+
+In Windows PowerShell:
+
+```powershell
+$env:DIO_APP_DIR = "$env:TEMP\dio"; uv run dio serve --no-browser
+```
+
 Process one procedure case from the command line:
 
 ```sh
@@ -105,6 +139,14 @@ uv run dio composite IMG_*.HEIC --out export --patient "Alex Wang" --tag "full m
 `--download-model` (about 24 MB, once, from this repository's GitHub Releases). To reset the
 classifier, delete the `classifier` folder in the app data directory (on macOS,
 `~/Library/Application Support/DentalImageOrganizer/classifier`).
+
+Move one case between libraries as a zip archive (the library root comes from the app's
+settings; importing refuses while the app is running):
+
+```sh
+uv run dio export-case "~/DentalImageOrganizer/Alex Wang/20261016 implant 16" case.zip
+uv run dio import-case case.zip [--on-conflict skip|copy]
+```
 
 ### Golden photos (local only)
 

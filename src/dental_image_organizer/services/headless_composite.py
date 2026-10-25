@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import time
 import unicodedata
 import uuid
@@ -31,26 +30,27 @@ from dental_image_organizer.errors import (
     StorageError,
     UnsupportedFormatError,
 )
+from dental_image_organizer.ml import training
 from dental_image_organizer.ml.assignment import (
     Assignment,
     AssignMethod,
     assign_by_classifier,
     check_overrides,
-    shooting_rank,
     with_overrides,
 )
 from dental_image_organizer.ml.classifier import (
     MIN_SAMPLES_PER_SLOT,
     SlotClassifier,
     load_classifier,
-    train_classifier,
 )
 from dental_image_organizer.ml.embedder import Embedder, EmbeddingPair
 from dental_image_organizer.ml.model_store import DEFAULT_MODEL, cached_model, download_model
 from dental_image_organizer.ml.samples import SampleStore
+from dental_image_organizer.ml.training import CLASSIFIER_FILE
 from dental_image_organizer.services.batch_io import (
     MTIME_WARNING,
     capture_time,
+    failure_message,
     header_capture_time,
     load_photo,
     load_photo_with_id,
@@ -67,11 +67,11 @@ from dental_image_organizer.services.composite import (
     render_cell,
 )
 from dental_image_organizer.services.headless import PhotoOutcome
+from dental_image_organizer.services.shooting_order import OrderedPhoto, shooting_slots
 
 log = structlog.get_logger(__name__)
 
 WORKING_LONG_EDGE = 1600
-CLASSIFIER_FILE = "model.json"
 
 ORDER_NOTE = (
     "Slots were assigned by shooting order: the AI classifier needs "
@@ -256,7 +256,7 @@ def run_composite(
     for photo, exc in plan.failed.items():
         working = workings[photo]
         problems[working.number] = PhotoOutcome(
-            working.source, "failed", message=_failure_message(exc)
+            working.source, "failed", message=failure_message(exc)
         )
 
     rendered: dict[Slot, RGBImage] = {}
@@ -292,16 +292,20 @@ def run_composite(
         if len(kept) < len(placed):
             notes.append(DUPLICATE_PHOTO_NOTE)
         try:
-            trained = _learn(
+            trained = training.learn(
+                paths.classifier_dir(),
                 embeddings.take([photo for _, photo in kept]),
                 [slot for slot, _ in kept],
-                [_photo_id(workings[photo]) for _, photo in kept],
-                ai.embedder.model_hash,
+                photo_ids=[_photo_id(workings[photo]) for _, photo in kept],
+                case_id=uuid.uuid4().hex,
+                source="export",
+                model_hash=ai.embedder.model_hash,
+                timestamp=time.time(),
             )
         except Exception as exc:
             # The composite is written already; a failed sample write must not hide it.
             log.exception("learning_failed")
-            learn_error = _failure_message(exc)
+            learn_error = failure_message(exc)
         else:
             learned = len(kept)
 
@@ -376,49 +380,12 @@ def resolve_assign(
 def _order_keeping_holes(
     workings: Sequence[_Working], holes: Sequence[_Hole], order: Sequence[Slot]
 ) -> Assignment:
-    """Shooting order in which each unreadable photo still holds its rank, leaving it empty.
-
-    Without the hole, every later photo would move up one slot. Photos may be passed in any
-    order, so a hole ranks by the capture time left in its header; without one, it ranks right
-    after the photo whose file name precedes it, because cameras number files in shooting
-    order. Equal capture times rank by file name for the same reason. A hole without a capture
-    time still ranks wrong when the camera's file numbers wrap past 9999 next to it.
-    """
-    # Listed by file name, so shooting_rank breaks a tie of capture times by file name.
-    timed = sorted(
-        [(w.taken, w.number, w.source) for w in workings]
-        + [(h.taken, h.number, h.source) for h in holes if h.taken is not None],
-        key=lambda entry: (_name_key(entry[2]), entry[1]),
-    )
-    ranked = [(timed[i][1], timed[i][2]) for i in shooting_rank([e[0] for e in timed])]
-    untimed = sorted(
-        (h for h in holes if h.taken is None), key=lambda h: (_name_key(h.source), h.number)
-    )
-    for hole in untimed:
-        ranked.insert(_name_position(ranked, hole.number, hole.source), (hole.number, hole.source))
-    by_number = {number: slot for (number, _), slot in zip(ranked, order, strict=False)}
+    """`shooting_slots` over the decoded photos and the holes, keyed by input position."""
+    photos = [OrderedPhoto(w.number, w.source.name, w.taken) for w in workings]
+    photos += [OrderedPhoto(h.number, h.source.name, h.taken, usable=False) for h in holes]
+    by_number = shooting_slots(photos, order)
     slots = tuple(by_number.get(w.number) for w in workings)
     return Assignment(slots, (None,) * len(slots), "order")
-
-
-def _name_position(ranked: Sequence[tuple[int, Path]], number: int, source: Path) -> int:
-    """The rank right after the photo whose file name precedes `source`'s."""
-    # Input order settles equal names, such as a retake saved in another folder.
-    key = (_name_key(source), number)
-    keys = [(_name_key(path), n) for n, path in ranked]
-    earlier = [i for i, other in enumerate(keys) if other < key]
-    if earlier:
-        return max(earlier, key=lambda i: keys[i]) + 1
-    # No file name precedes it, so it was shot before the photo whose name comes first.
-    return min(range(len(keys)), key=lambda i: keys[i])
-
-
-def _name_key(path: Path) -> tuple[str | int, ...]:
-    # Numbers compare as numbers, so IMG_99 sorts before IMG_100; macOS may hand over
-    # decomposed (NFD) names.
-    name = unicodedata.normalize("NFC", path.name).casefold()
-    parts = re.split(r"(\d+)", name)
-    return tuple(int(part) if i % 2 else part for i, part in enumerate(parts))
 
 
 def _resolve_ai(options: CompositeOptions, notify: Callable[[str], None]) -> _AiState:
@@ -481,7 +448,7 @@ def _embed(
         # onnxruntime raises its own exception types, OpenCV its cv2.error, and a large batch
         # a MemoryError; none of them may cost the composite (spec §4.6).
         log.exception("embedding_failed")
-        message = f"Running the AI model failed: {_failure_message(exc)}"
+        message = f"Running the AI model failed: {failure_message(exc)}"
         if learn:
             raise ModelUnavailableError(message) from exc
         return None, (_fallback_note(message),)
@@ -543,13 +510,6 @@ def _fallback_note(reason: str) -> str:
     return f"{reason}{stop} {ORDER_FALLBACK_NOTE}"
 
 
-def _failure_message(exc: Exception) -> str:
-    # The caller has logged the trace already; this only words the reported message.
-    if isinstance(exc, DioError):
-        return str(exc)
-    return os_error_message(exc) if isinstance(exc, OSError) else unexpected_message(exc)
-
-
 def _photo_id(working: _Working) -> str:
     # _load_working hashes every photo of a --learn run, the only run that reads the ids.
     assert working.photo_id is not None
@@ -561,29 +521,3 @@ def _cell_outcome(cell: CellPlan, source: Path) -> CellOutcome:
     return CellOutcome(
         cell.slot, source, cell.confidence, level.angle_deg, level.confident, cell.geometry.flip
     )
-
-
-def _learn(
-    pairs: EmbeddingPair, slots: Sequence[Slot], photo_ids: Sequence[str], model_hash: str
-) -> bool:
-    """Store the placed photos as confirmed samples and retrain; True once the classifier is."""
-    directory = paths.classifier_dir()
-    # A random case id and content-hash photo ids keep patient names out of the data folder.
-    samples = SampleStore(directory).append(
-        pairs,
-        slots,
-        photo_ids=photo_ids,
-        case_id=uuid.uuid4().hex,
-        source="export",
-        model_hash=model_hash,
-        timestamp=time.time(),
-    )
-    current = samples.for_model(model_hash)
-    classifier = train_classifier(current.pairs, current.slots, model_hash)
-    if classifier is None:
-        # A file left from before (damaged, another model's, or trained on labels since
-        # replaced) no longer matches the samples; the next run must agree with "not trained".
-        (directory / CLASSIFIER_FILE).unlink(missing_ok=True)
-        return False
-    classifier.save(directory / CLASSIFIER_FILE)
-    return True

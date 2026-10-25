@@ -309,8 +309,12 @@ by future adapters (OpenClaw, Telegram, CLI).
     leave the Dock launcher hanging ("not responding").
   - POSIX: `start_new_session=True`.
   - Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`.
-  - The parent polls `GET /api/health` for up to 20 s, then opens the browser (unless
-    `--no-browser`) and exits 0. On timeout it exits non-zero and prints the log file path.
+  - The parent passes a one-time token in the `DIO_READY_TOKEN` environment variable, and the
+    child writes it into `instance.json`. The child's process id cannot identify the server: on
+    Windows the venv's `python.exe` is a launcher, so the server runs under another pid.
+  - The parent waits for that token in `instance.json`, then polls `GET /api/health`, for up to
+    20 s in all. Then it opens the browser (unless `--no-browser`) and exits 0. On timeout it
+    exits non-zero and prints the log file path.
 - **Idle shutdown.**
   - The UI sends `POST /api/heartbeat` every 30 s.
   - The server exits when there has been no heartbeat for `idle_shutdown_minutes` (default 30)
@@ -319,6 +323,9 @@ by future adapters (OpenClaw, Telegram, CLI).
 - **Concurrency.**
   - CPU-heavy work runs in a `ThreadPoolExecutor` with `max_workers = min(4, os.cpu_count())`.
     OpenCV and onnxruntime release the GIL.
+  - Background jobs hold at most `max_workers − 1` workers at once (at least one); the others wait
+    in submission order. Requests that run on the executor, such as previews and edits, then
+    never wait behind a batch.
   - `cv2.setNumThreads(1)` is set per worker to avoid oversubscription.
   - Writes to a case are serialized by a per-case `threading.Lock`.
 
@@ -566,6 +573,9 @@ same original-minus-mirror feature; this is an independent re-implementation.
    - Defaults start from Settings (§11, question 2) and are then **learned**. Every confirmed
      composite, whether an export or a teaching set (§3.5), records each slot's final flip in
      `classifier/flips.json`.
+   - Confirmations are keyed by case, or by teaching session. Exporting the same case again
+     replaces that case's earlier confirmation instead of counting it twice. Samples already
+     follow this rule (§4.6). A pinned slot records nothing.
    - Once a slot has at least 3 confirmations, its default becomes the most frequent value among
      its last (up to) 5 confirmations. On a tie, the current default is kept.
    - Settings shows the learned defaults. The user can pin a slot's flip to stop learning.
@@ -575,6 +585,11 @@ same original-minus-mirror feature; this is an independent re-implementation.
      - Confirmation history and learned values live in `classifier/flips.json`.
      - The effective default of a slot is its pin if set, otherwise its learned value (≥ 3
        confirmations), otherwise its starting value.
+     - A damaged `flips.json` only costs the learned values: planning and case views fall back
+       to pins and starting values, and `GET /classifier/status` reports the damage in
+       `flips_damaged`. Recording new confirmations still fails, since nothing can be merged
+       into the damaged file: an export reports it as a learning failure, and teaching's
+       confirm as an error.
    - The flip is learned per slot rather than predicted per photo. A mirrored right-side view
      looks like a direct left-side view, so appearance alone cannot tell a mirror shot from the
      opposite side. Per-slot learning follows the dentist's habits instead.
@@ -617,7 +632,7 @@ Originals are never modified. Each photo's processing result is a small paramete
 - `model`: `similarity | homography`, the model that produced `transform` (§4.5.1). F2 photos are
   always `similarity`. "Reset perspective" replaces a homography with its closest similarity (a
   least-squares fit on the four output-frame corners).
-- `output_aspect` and `output_size`: the output frame.
+- `output_size`: the output frame. It fixes the aspect, so there is no separate aspect field.
   - F1: the reference size × the case's `output_scale` (1, 1.5, or 2; default 1). All photos of a
     case share it, so the sequence image stays equal-height. A scale that would make either side
     longer than 65,500 px (the JPEG limit) or the output larger than 200 MP (the decoder limit,
@@ -628,9 +643,25 @@ Originals are never modified. Each photo's processing result is a small paramete
 - `color`: `{method, params}`.
 - `source`: `auto` or `manual`. Manual edits are never overwritten by auto re-processing unless
   the user chooses "Reset to auto".
-- `confidence`, `status` (`ok | needs_review | failed`), `message`, and
+- `confidence`, `status` (`ok | needs_review`), `message`, and
   `algorithm_version` (for example `align-1`). The algorithm version allows selective
   re-processing after upgrades.
+- `flip` (F2 only): the flip applied to the photo's cell (`none | horizontal | vertical |
+  rotate_180`).
+
+**Photo state.** The edit record describes a placement. Whether the photo could be processed at
+all is recorded on the photo itself, because a photo that fails to decode has no edit record:
+
+- `state`: `pending | ready | failed`, plus `error` (a message when `state = "failed"`).
+- `edit` is `null` until the photo has a placement. In a procedure case that means it was aligned
+  to the reference. In a composite case it means the photo is in a slot.
+- `stage_source`: `auto | manual`. The D0 stage rule (§3.2 step 5) never overrides a stage the
+  dentist set.
+- `role = "photo"` marks the non-reference photos of a procedure case.
+- Dropping a photo that is already in the case reports it as `duplicate`, with two exceptions
+  that retry it under its own record: a `failed` photo, and a `pending` one while no job of the
+  case is queued or running (Quit or a crash ended the run before its job processed it). At
+  startup the server also queues processing for every photo left `pending`.
 
 **Rendering.** The edit record is applied to an original as follows:
 
@@ -661,6 +692,10 @@ Originals are never modified. Each photo's processing result is a small paramete
 - **Patient export zip (§3.4):** `{patient}_Export_{YYYYMMDD}.zip`, using the generation date
   (local). Zips are built in the user cache directory and deleted after download or at the next
   start.
+- **Single-case export zip:** `{patient}_{title}_Export_{YYYYMMDD}.zip`, using the generation
+  date (local).
+- **Case archive zip (§4.11):** `{patient}_{title}_Archive_{YYYYMMDD}.zip`, using the case's
+  creation date.
 
 **Sanitization** is applied to each component (`patient`, `title`, `tag`):
 
@@ -673,6 +708,14 @@ Originals are never modified. Each photo's processing result is a small paramete
 
 **Collisions** within an export folder get `_2`, `_3`, … before the extension. Existing files are
 never overwritten silently: the export screen offers "Replace previous export" or "Keep both".
+
+- "Replace previous export" deletes only the files that this case's earlier exports wrote, which
+  are recorded in `case.exports`. Then it writes the new files.
+  - Each record holds the SHA-256 of the bytes written. A recorded file whose bytes differ (the
+    dentist edited it), or whose record has no hash, is kept and listed in the export's
+    `failures`, and its record is dropped. The new file then takes `_2`.
+- Files the app did not write are never deleted or overwritten. A new file whose name they
+  already use gets `_2`.
 
 ### 4.10 CLI
 
@@ -714,6 +757,10 @@ by Time Machine.
 | cache | render cache (LRU-capped), model file, export zips, teaching sessions, update script |
 | log | `dio.log` |
 
+When the environment variable `DIO_APP_DIR` is set, the four directories are
+`$DIO_APP_DIR/{config,data,cache,log}` and the default library is `$DIO_APP_DIR/library`. Tests and
+the macOS smoke test use it, so they never touch the real folders.
+
 **`case.json` (schema_version 1)**, as Pydantic models in `storage/schema.py`:
 
 ```json
@@ -736,7 +783,10 @@ by Time Machine.
       "captured_at": "2026-10-16T14:30:12+08:00",
       "captured_at_source": "exif",
       "role": "reference",
+      "state": "ready",
+      "error": null,
       "stage": "pre_op",
+      "stage_source": "auto",
       "slot": null,
       "edit": {
         "transform": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
@@ -754,7 +804,7 @@ by Time Machine.
   ],
   "sequence": {"photo_ids": [], "gap_px": 0},
   "composite": null,
-  "exports": [{"file": "export/…jpg", "kind": "single", "created_at": "…"}]
+  "exports": [{"file": "export/…jpg", "kind": "single", "created_at": "…", "sha256": "…"}]
 }
 ```
 
@@ -763,16 +813,27 @@ Field rules:
 - `type = "composite"` cases use:
   - `role = "member"`;
   - `slot` ∈ the slots in §4.6, or `null` for the tray;
-  - `"composite": {"baseline_photo_id", "cell_size": [1200, 800], "gap_px": 0, "gap_color": "#000000"}`.
-- `stage` ∈ `pre_op | intra_op | post_op`, for procedure cases only.
+  - `"composite": {"baseline_photo_id", "cell_size": [1200, 800], "gap_px": 0, "gap_color": "#000000", "slots_source": "auto"}`,
+    where `slots_source` ∈ `auto | manual`;
+  - an `edit` with a `flip` (§4.8).
+- `role` ∈ `reference | photo` for procedure cases (`photo` for every non-reference photo), and
+  `member` for composite cases.
+- `state` ∈ `pending | ready | failed`; `error` is a message when `state = "failed"`, else `null`.
+- `edit` is `null` until the photo has a placement (§4.8). Its `status` ∈ `ok | needs_review`.
+- `stage` ∈ `pre_op | intra_op | post_op`, for procedure cases only. `stage_source` ∈
+  `auto | manual`: the D0 rule never overrides a `manual` stage.
 - `output_scale` ∈ `1 | 1.5 | 2`, for procedure cases only (§4.8).
+- `patient_id` follows the folder: a case folder moved into another patient's folder in Finder
+  belongs to that patient. Reads report the new id at once, and the next write saves it.
 
 Writes are **atomic**: write `case.json.tmp`, `fsync`, then `os.replace`. Readers validate with
 Pydantic. Unknown future `schema_version` values raise `StorageError` with an upgrade message.
 
 **Archive.** A case zip contains `patient.json`, `case.json`, and `originals/`. Exports and caches
-are regenerated. On import, an existing case with the same id prompts the user to skip or import
-as a copy.
+are regenerated. Import takes `on_conflict=ask|skip|copy` (§4.12). With `ask` (the default), a
+case id that is already in the library is answered with `409 case_exists`, which carries the
+existing case's id and title, so the UI can ask the user to skip or import as a copy and then
+send the archive again with the answer.
 
 ### 4.12 HTTP API (prefix `/api`)
 
@@ -784,11 +845,11 @@ as a copy.
 | `POST /system/reveal` | Reveal a library path in Finder / Explorer (path must be inside the library) |
 | `POST /system/update` | Start the in-app update (§7.3); 409 while a job is running |
 | `GET / PUT /settings` | Read / update settings |
-| `GET /patients` | Patients with notes and case summaries |
+| `GET /patients` | Patients with notes and case summaries, plus the folders that could not be read (damaged, saved by a newer version, or duplicated), so a damaged case is visible instead of silently missing |
 | `PATCH /patients/{id}` | Update a patient's name or note |
 | `POST /cases` | Create a case `{type, title, patient_id}` for an existing patient, or `{type, title, patient_name, patient_note?}` for a new one |
 | `GET / PATCH / DELETE /cases/{id}` | Read, update (title, sequence selection, `output_scale`, composite settings), soft-delete to `.trash` |
-| `POST /cases/{id}/photos` | Multipart upload (multiple files) → `{job_id, skipped: [{name, reason}]}`; processing is async; unsupported files are skipped (§3.1) |
+| `POST /cases/{id}/photos` | Multipart upload (multiple files) → `{job_id, added, skipped: [{name, reason, message}]}`; processing is async; unsupported files are skipped (§3.1). `reason` is one of `video`, `raw`, `sidecar`, `unknown`, `duplicate`, `too_large`. An optional `last_modified` form field per file (milliseconds since the epoch, from the browser's `File.lastModified`) feeds the modification-time fallback of §4.4 step 5 |
 | `PUT /cases/{id}/reference` | Set or replace the reference (procedure); triggers re-processing |
 | `PATCH /cases/{id}/photos/{pid}` | Update stage, slot, flip, manual `edit`, or reset to auto |
 | `DELETE /cases/{id}/photos/{pid}` | Remove a photo |
@@ -800,7 +861,7 @@ as a copy.
 | `GET /cases/{id}/export/{job_id}/zip` | Download the exported files as a zip |
 | `POST /patients/{id}/export` | Export every case of a patient (§3.4): `{include, conflict}` as above → `job_id` |
 | `GET /patients/{id}/export/{job_id}/zip` | Download the patient export as one zip, one folder per case |
-| `GET /cases/{id}/archive` / `POST /archive/import` | Case archive export / import |
+| `GET /cases/{id}/archive` / `POST /archive/import?on_conflict=ask\|skip\|copy` | Case archive export / import; with `ask` (default) an existing case id answers `409 case_exists` with that case's id and title |
 | `GET /jobs/{job_id}` / `GET /jobs/{job_id}/events` | Job status / Server-Sent Events progress stream |
 | `GET /model/status` / `POST /model/download` | AI model availability / consented download (job) |
 | `GET /classifier/status` / `POST /classifier/retrain` | Sample counts per slot, trained flag, learned flip defaults / manual retrain |
@@ -809,8 +870,14 @@ as a copy.
 | `POST /classifier/teach/{sid}/confirm` | `{slots: {slot: photo_id}, flips: {slot: flip}}` → stores samples and flips, retrains, deletes the session |
 | `DELETE /classifier/teach/{sid}` | Cancel; deletes the session |
 
+Patients (`GET /patients`, `PATCH /patients/{id}`), case summaries, and case views carry a
+`folder`: the folder's path relative to the library root, `/`-separated, under its name on disk.
+`POST /system/reveal` takes it as is, and `{folder}/export` for a case's exports.
+
 TypeScript types for the frontend are generated from the FastAPI OpenAPI schema with
-`openapi-typescript`. CI fails if the generated file is stale.
+`openapi-typescript`. CI fails if the generated file is stale. The schema declares the error
+body of §4.13 for `422`, `4XX`, and `5XX` on every route, and `text/event-stream` for
+`/jobs/{job_id}/events`.
 
 ### 4.13 Errors, logging, and security
 
@@ -818,19 +885,23 @@ TypeScript types for the frontend are generated from the FastAPI OpenAPI schema 
 
 - `UnsupportedFormatError`
 - `CorruptImageError`
-- `CaseNotFoundError`
-- `PhotoNotFoundError`
+- `NotFoundError`, with the subclasses `PatientNotFoundError`, `CaseNotFoundError`,
+  `PhotoNotFoundError`, `JobNotFoundError`, and `TeachSessionNotFoundError`
+- `ConflictError` (409), with the subclasses `JobRunningError`, `CaseExistsError`, and
+  `NotReadyError`
+- `InvalidRequestError` (422, semantic validation), with the subclass `InvalidEditError`
+- `InvalidArchiveError`: a damaged or foreign case archive
+- `PathOutsideLibraryError` (400): path confinement
 - `StorageError`
 - `ModelUnavailableError`
 - `ModelIntegrityError`
-- `InvalidEditError`
 
 A FastAPI exception handler maps each error to an HTTP status and returns
 `{"error": {"code", "message", "details"}}`. Unexpected exceptions are logged with a stack trace
 and return 500 with a generic message.
 
 **Batch isolation.** One bad photo never aborts a batch. The photo is recorded with
-`status = "failed"` and a message, and the job reports partial success.
+`state = "failed"` and an `error` message, and the job reports partial success.
 
 **Alignment is not an exception.** Low confidence yields `needs_review`, never an exception.
 
@@ -850,8 +921,10 @@ and return 500 with a generic message.
   `Origin` instead (§5.4).
 - `/system/reveal` and all file access are confined to the library root after path resolution
   (no traversal).
-- Uploads are limited to 200 MB per file, and decoded pixel count is capped at 200 MP
-  (decompression-bomb guard).
+- Uploads are limited to 200 MB per file (a larger file is reported as `too_large`), and decoded
+  pixel count is capped at 200 MP (decompression-bomb guard).
+- Multipart requests must carry a `Content-Length`: a missing one is answered with 411 and one
+  over 2 GiB with 413.
 
 **Network.**
 

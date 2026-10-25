@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import cv2
 import structlog
 
+from dental_image_organizer.core import transform as tf
 from dental_image_organizer.core.color import LabAffine, fit_reinhard
 from dental_image_organizer.core.geometry import CellGeometry, normalize_view
 from dental_image_organizer.core.imageio import RGBImage
@@ -85,8 +86,9 @@ def plan_composite(
                 log.exception("photo_failed")
                 failed[photo] = exc
 
-    chosen, colors, color_failed = _fit_colors(
-        images, slot_map, geometries, baseline, cell_size, labels
+    transforms = {slot: geometry.transform for slot, geometry in geometries.items()}
+    chosen, colors, color_failed = fit_cell_colors(
+        images, slot_map, transforms, baseline, cell_size, labels
     )
     failed |= color_failed
     cells = {
@@ -114,15 +116,21 @@ def compose(
     return render_composite(cells, cell_size, gap_px=gap_px, gap_color=gap_color)
 
 
-def _fit_colors(
+def fit_cell_colors(
     images: Sequence[RGBImage],
     slot_map: Mapping[Slot, int],
-    geometries: Mapping[Slot, CellGeometry],
+    transforms: Mapping[Slot, tf.Matrix],
     baseline: Slot,
     cell_size: tuple[int, int],
-    labels: Sequence[int],
+    labels: Sequence[int | str],
+    *,
+    label_key: str = "photo",
 ) -> tuple[Slot | None, dict[Slot, LabAffine], dict[int, Exception]]:
-    """Match each cell to the baseline: returns the baseline used, the fits, and the failures."""
+    """Match each cell to the baseline: returns the baseline used, the fits, and the failures.
+
+    `transforms` holds the cells to fit, a manual cell's matrix included. `labels[i]` tags the
+    log events of image i under `label_key`: the CLI's input positions, the library's photo ids.
+    """
     # Small renders keep the fit cheap, and the normalized transforms make them match the
     # full-size cells that are rendered later.
     width = COLOR_ANALYSIS_WIDTH
@@ -130,13 +138,11 @@ def _fit_colors(
     failed: dict[int, Exception] = {}
     previews: dict[Slot, RGBImage] = {}
     regions: dict[Slot, BoolMask] = {}
-    for slot, geometry in geometries.items():
+    for slot, transform in transforms.items():
         photo = slot_map[slot]
-        with structlog.contextvars.bound_contextvars(photo=labels[photo]):
+        with structlog.contextvars.bound_contextvars(**{label_key: labels[photo]}):
             try:
-                preview = render(
-                    images[photo], geometry.transform, size, interpolation=cv2.INTER_AREA
-                )
+                preview = render(images[photo], transform, size, interpolation=cv2.INTER_AREA)
                 teeth = tooth_mask(preview)
                 region = teeth | gingiva_mask(preview, teeth)
             except Exception as exc:
@@ -146,7 +152,7 @@ def _fit_colors(
                 previews[slot], regions[slot] = preview, region
 
     # The requested baseline if it survived, else the first filled slot in grid order.
-    chosen = baseline if baseline in previews else next(iter(previews), None)
+    chosen = baseline if baseline in previews else next((s for s in SLOTS if s in previews), None)
     if chosen is None:
         return None, {}, failed
     colors: dict[Slot, LabAffine] = {}
@@ -154,7 +160,7 @@ def _fit_colors(
         if slot == chosen:
             continue
         photo = slot_map[slot]
-        with structlog.contextvars.bound_contextvars(photo=labels[photo]):
+        with structlog.contextvars.bound_contextvars(**{label_key: labels[photo]}):
             try:
                 colors[slot] = fit_reinhard(
                     previews[slot], regions[slot], previews[chosen], regions[chosen]

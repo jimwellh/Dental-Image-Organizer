@@ -19,6 +19,11 @@ dependencies = [
   "scipy>=1.14",
   "structlog>=25.1",
   "typer>=0.15",
+  "fastapi>=0.146",
+  "filelock>=4.2",
+  "pydantic>=2.14",
+  "python-multipart>=0.0.32",
+  "uvicorn>=0.54",
 ]
 
 [project.scripts]
@@ -27,6 +32,7 @@ dental-image-organizer = "dental_image_organizer.cli:app"
 
 [dependency-groups]
 dev = [
+  "httpx2>=2.14",
   "hypothesis>=6.120",
   "import-linter>=2.1",
   "mypy>=1.15",
@@ -71,22 +77,48 @@ markers = ["golden: needs real photos in local_fixtures/ (skipped when absent)"]
 root_package = "dental_image_organizer"
 
 [[tool.importlinter.contracts]]
-name = "core is pure: no services or CLI imports"
+name = "core is pure"
 type = "forbidden"
 source_modules = ["dental_image_organizer.core"]
 forbidden_modules = [
-  "dental_image_organizer.ml",
-  "dental_image_organizer.services",
-  "dental_image_organizer.cli",
-  "dental_image_organizer.paths",
+  "dental_image_organizer.ml", "dental_image_organizer.storage",
+  "dental_image_organizer.services", "dental_image_organizer.api", "dental_image_organizer.cli",
+  "dental_image_organizer.paths", "dental_image_organizer.config",
+  "dental_image_organizer.instance", "dental_image_organizer.server",
 ]
 
 [[tool.importlinter.contracts]]
-name = "ml uses core only: no services, CLI, or app paths"
+name = "ml uses core only"
 type = "forbidden"
 source_modules = ["dental_image_organizer.ml"]
 forbidden_modules = [
-  "dental_image_organizer.services",
-  "dental_image_organizer.cli",
-  "dental_image_organizer.paths",
+  "dental_image_organizer.storage", "dental_image_organizer.services",
+  "dental_image_organizer.api", "dental_image_organizer.cli", "dental_image_organizer.paths",
+  "dental_image_organizer.config", "dental_image_organizer.instance",
+  "dental_image_organizer.server",
 ]
+
+[[tool.importlinter.contracts]]
+name = "storage uses core only and takes its folders as arguments"
+type = "forbidden"
+source_modules = ["dental_image_organizer.storage"]
+forbidden_modules = [
+  "dental_image_organizer.ml", "dental_image_organizer.services",
+  "dental_image_organizer.api", "dental_image_organizer.cli", "dental_image_organizer.paths",
+  "dental_image_organizer.config", "dental_image_organizer.instance",
+  "dental_image_organizer.server",
+]
+
+[[tool.importlinter.contracts]]
+name = "services never import the API, the CLI, or the server"
+type = "forbidden"
+source_modules = ["dental_image_organizer.services"]
+forbidden_modules = [
+  "dental_image_organizer.api", "dental_image_organizer.cli", "dental_image_organizer.server",
+]
+
+[[tool.importlinter.contracts]]
+name = "the API never imports the CLI or the server"
+type = "forbidden"
+source_modules = ["dental_image_organizer.api"]
+forbidden_modules = ["dental_image_organizer.cli", "dental_image_organizer.server"]
