@@ -107,3 +107,69 @@ test("markClosed closes at once", async () => {
   // The closed state polls health; let it settle so no request outlives the test.
   await advance(0);
 });
+
+test("after a Quit, an answering server does not reload until it has been seen to go away", async () => {
+  let up = true;
+  fakeServer({
+    "POST /api/heartbeat": () => undefined,
+    "GET /api/health": () => {
+      if (!up) throw new Error("down");
+      return healthy();
+    },
+  });
+  const reload = vi.fn();
+  const { result } = renderHook(() => useServerConnection({ reload }));
+  act(() => {
+    result.current.markClosed();
+  });
+
+  await advance(RECONNECT_MS * 3);
+  expect(reload).not.toHaveBeenCalled();
+
+  up = false;
+  await advance(RECONNECT_MS * 2);
+  expect(reload).not.toHaveBeenCalled();
+
+  up = true;
+  await advance(RECONNECT_MS * 2);
+  expect(reload).toHaveBeenCalledOnce();
+});
+
+test("a long timer gap does not close the page while the server answers", async () => {
+  fakeServer({
+    "POST /api/heartbeat": () => undefined,
+    "GET /api/health": healthy,
+  });
+  const { result } = renderHook(() => useServerConnection({ reload: vi.fn() }));
+
+  // A hidden tab or a sleeping laptop: the clock jumps, the timers do not run meanwhile.
+  vi.setSystemTime(Date.now() + 60_000);
+  await advance(1000);
+  expect(result.current.state).toBe("connected");
+  await advance(LOST_AFTER_MS * 2);
+  expect(result.current.state).toBe("connected");
+});
+
+test("after a long timer gap a server that is gone still reads as closed", async () => {
+  let up = true;
+  const gate = () => {
+    if (!up) throw new Error("down");
+  };
+  fakeServer({
+    "POST /api/heartbeat": gate,
+    "GET /api/health": () => {
+      gate();
+      return healthy();
+    },
+  });
+  const { result } = renderHook(() => useServerConnection({ reload: vi.fn() }));
+
+  up = false;
+  vi.setSystemTime(Date.now() + 60_000);
+  await advance(1000);
+  expect(result.current.state).toBe("connected");
+  await advance(LOST_AFTER_MS - 2000);
+  expect(result.current.state).toBe("connected");
+  await advance(4000);
+  expect(result.current.state).toBe("closed");
+});

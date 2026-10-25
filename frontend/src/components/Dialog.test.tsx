@@ -87,3 +87,70 @@ test("ConfirmDialog confirms or cancels", async () => {
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(onCancel).toHaveBeenCalledOnce();
 });
+
+test("Escape works after a click on the backdrop moved focus to the page", async () => {
+  const user = userEvent.setup();
+  const onClose = vi.fn();
+  render(
+    <Dialog title="Title" onClose={onClose}>
+      <Button>Inside</Button>
+    </Dialog>,
+  );
+  const backdrop = screen.getByRole("dialog").parentElement as HTMLElement;
+  await user.click(backdrop);
+  expect(document.body).toHaveFocus();
+
+  await user.keyboard("{Escape}");
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+test("Shift+Tab from the panel itself lands on the last control", async () => {
+  const user = userEvent.setup();
+  render(
+    <Dialog title="Title" onClose={vi.fn()}>
+      <Button>One</Button>
+      <Button>Two</Button>
+    </Dialog>,
+  );
+  screen.getByRole("dialog").focus();
+  await user.tab({ shift: true });
+  expect(screen.getByRole("button", { name: "Two" })).toHaveFocus();
+});
+
+test("Tab from outside the dialog returns to its first control", async () => {
+  const user = userEvent.setup();
+  render(
+    <Dialog title="Title" onClose={vi.fn()}>
+      <Button>One</Button>
+      <Button>Two</Button>
+    </Dialog>,
+  );
+  await user.click(screen.getByRole("dialog").parentElement as HTMLElement);
+  await user.tab();
+  expect(screen.getByRole("button", { name: "One" })).toHaveFocus();
+});
+
+test("only the topmost of two stacked dialogs handles Escape", async () => {
+  const user = userEvent.setup();
+  const outer = vi.fn();
+  const inner = vi.fn();
+  // The inner dialog opens later, as a confirmation over a dialog does.
+  const { rerender } = render(
+    <Dialog title="Outer" onClose={outer}>
+      <Button>Outer</Button>
+    </Dialog>,
+  );
+  rerender(
+    <>
+      <Dialog title="Outer" onClose={outer}>
+        <Button>Outer</Button>
+      </Dialog>
+      <Dialog title="Inner" onClose={inner}>
+        <Button>Inner</Button>
+      </Dialog>
+    </>,
+  );
+  await user.keyboard("{Escape}");
+  expect(inner).toHaveBeenCalledOnce();
+  expect(outer).not.toHaveBeenCalled();
+});
