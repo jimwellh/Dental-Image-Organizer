@@ -1,0 +1,49 @@
+import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { en } from "../../strings/en";
+import { errorReply, fakeServer } from "../../test/fakeServer";
+import { renderWithClient } from "../../test/render";
+import { Shell } from "./Shell";
+
+const routes = {
+  "POST /api/heartbeat": () => undefined,
+  "GET /api/health": () => ({ status: "ok", version: "0" }),
+};
+
+test("Quit shows the closed notice at once", async () => {
+  const user = userEvent.setup();
+  const server = fakeServer({
+    ...routes,
+    "POST /api/system/shutdown": () => ({ status: "stopping" }),
+  });
+  renderWithClient(
+    <Shell>
+      <p>content</p>
+    </Shell>,
+  );
+  await user.click(screen.getByRole("button", { name: en.nav.quit }));
+
+  expect(
+    await screen.findByText("Dental Image Organizer has closed. Click its Dock icon to reopen."),
+  ).toBeInTheDocument();
+  expect(server.calls.filter((call) => call.path === "/api/system/shutdown")).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: en.nav.quit })).not.toBeInTheDocument();
+  expect(screen.queryByText("content")).not.toBeInTheDocument();
+});
+
+test("a refused Quit shows the server's message and keeps the app open", async () => {
+  const user = userEvent.setup();
+  fakeServer({
+    ...routes,
+    "POST /api/system/shutdown": () => errorReply(500, "internal", "Could not stop."),
+  });
+  renderWithClient(
+    <Shell>
+      <p>content</p>
+    </Shell>,
+  );
+  await user.click(screen.getByRole("button", { name: en.nav.quit }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not stop.");
+  expect(screen.getByText("content")).toBeInTheDocument();
+});
