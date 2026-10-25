@@ -17,6 +17,7 @@ from dental_image_organizer.api.models import (
 )
 from dental_image_organizer.ml.classifier import MIN_SAMPLES_PER_SLOT
 from dental_image_organizer.services.ai import ClassifierStatus
+from dental_image_organizer.services.composite_case import flip_history
 from dental_image_organizer.services.context import AppContext
 from dental_image_organizer.services.flips import flip_status
 from dental_image_organizer.services.teach import TeachSize
@@ -27,8 +28,10 @@ RETRAIN_KEY = "classifier"
 
 
 def _view(ctx: AppContext, status: ClassifierStatus) -> ClassifierView:
-    flips = flip_status(ctx.settings.get(), ctx.ai.flip_history())
-    return ClassifierView.of(status, flips, min_samples=MIN_SAMPLES_PER_SLOT)
+    # A damaged history shows the defaults planning falls back to, and why.
+    history, damaged = flip_history(ctx)
+    flips = flip_status(ctx.settings.get(), history)
+    return ClassifierView.of(status, flips, flips_damaged=damaged, min_samples=MIN_SAMPLES_PER_SLOT)
 
 
 @router.get("/classifier/status")

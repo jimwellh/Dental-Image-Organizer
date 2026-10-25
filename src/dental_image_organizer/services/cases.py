@@ -162,6 +162,9 @@ def upload_photos(ctx: AppContext, case_id: str, uploads: Sequence[Upload]) -> U
 def delete_photo(ctx: AppContext, case_id: str, photo_id: str) -> CaseRecord:
     """Remove a photo, and its original once no record uses the file."""
     removed: list[PhotoRecord] = []
+    # Read before the case lock, as composite_case does: it waits while training runs.
+    composite = ctx.library().read_case(case_id).type == "composite"
+    defaults = composite_case.composite_flips(ctx) if composite else {}
 
     def change(case: CaseRecord) -> CaseRecord:
         removed.clear()
@@ -183,7 +186,7 @@ def delete_photo(ctx: AppContext, case_id: str, photo_id: str) -> CaseRecord:
         trimmed = case.model_copy(update=update)
         if case.type == "composite":
             # Colors are fitted across the cells, so the others change with the one removed.
-            return composite_case.replan(ctx, trimmed)
+            return composite_case.replan(ctx, trimmed, defaults)
         # The earliest photo may be gone, which moves the day the stage rule counts from.
         return procedure_case.restaged(trimmed)
 

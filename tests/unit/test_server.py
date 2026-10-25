@@ -1,3 +1,4 @@
+import json
 import signal
 import socket
 from pathlib import Path
@@ -112,6 +113,31 @@ def test_serve_reports_a_holder_that_does_not_answer(
         f"error: Another Dental Image Organizer process holds {dirs.instance_lock} "
         f"but does not answer; see {dirs.log_file}"
     ) in capsys.readouterr().err
+
+
+def test_an_unexpected_failure_is_logged_without_its_path(
+    dirs: AppDirs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Built at runtime so the name is only a value, never part of a source line in a trace.
+    patient = " ".join(["Alex", "Wang"])
+
+    def unwritable(path: Path, info: InstanceInfo) -> None:
+        raise PermissionError(13, "Permission denied", str(dirs.data / patient / path.name))
+
+    monkeypatch.setattr(server, "write_instance", unwritable)
+    [port] = free_ports(1)
+
+    with pytest.raises(PermissionError):
+        server.serve(port=port, open_browser=False)
+
+    lines = [json.loads(line) for line in dirs.log_file.read_text("utf-8").splitlines()]
+    [crashed] = [line for line in lines if line["event"] == "server_crashed"]
+    assert "PermissionError: [Errno 13] Permission denied" in crashed["exception"]
+    assert patient not in dirs.log_file.read_text("utf-8")
+    # The lock is released, so the next start is not turned away.
+    lock = InstanceLock(dirs.instance_lock)
+    assert lock.try_acquire()
+    lock.release()
 
 
 def test_serve_refuses_a_privileged_port() -> None:

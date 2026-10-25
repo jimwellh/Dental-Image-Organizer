@@ -202,6 +202,14 @@ def composite(
         learn=learn,
         download_model=download_model,
     )
+    # Learning writes the classifier folder, which a running server writes too (spec §4.3).
+    lock = InstanceLock(app_dirs().instance_lock) if learn else None
+    if lock is not None and not lock.try_acquire():
+        typer.echo(
+            "error: Dental Image Organizer is running; teach from the app, or quit it first.",
+            err=True,
+        )
+        raise typer.Exit(1)
     try:
         report = run_composite(
             photos, out, patient=patient, tag=tag, options=options, notify=typer.echo
@@ -209,6 +217,9 @@ def composite(
     except (DioError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
+    finally:
+        if lock is not None:
+            lock.release()
     _print_composite(report, learn=learn, baseline=options.baseline)
     if report.failed or report.output is None:
         raise typer.Exit(1)

@@ -189,8 +189,9 @@ class TeachSessions:
                 thumb_jpeg = encode_jpeg(thumb, None, quality=PREVIEW_QUALITY)
                 preview_jpeg = encode_jpeg(preview, None, quality=PREVIEW_QUALITY)
             except Exception as exc:
-                # One bad photo never aborts a batch (spec §4.13); its rank stays as a hole.
-                log.error("photo_unreadable", photo_id=photo.id, error=failure_message(exc))
+                # One bad photo never aborts a batch (spec §4.13); its rank stays as a hole. The
+                # message of an unexpected error may name things, so only its type is logged.
+                log.error("photo_unreadable", photo_id=photo.id, error=type(exc).__name__)
                 self._update(
                     entry, index, replace(photo, state="failed", error=failure_message(exc))
                 )

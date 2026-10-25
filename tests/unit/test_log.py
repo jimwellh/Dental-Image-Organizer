@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import logging
@@ -191,6 +192,39 @@ def test_debug_logs_only_the_apps_own_events(
     events = [record["event"] for record in records(log_file)]
     assert "aligned" in events
     assert not any("Artist" in event for event in events)
+
+
+def test_asyncio_messages_with_an_exception_are_withheld(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_file = file_logging(tmp_path, monkeypatch)
+    loop = asyncio.new_event_loop()
+    try:
+        future = loop.create_future()
+        future.set_exception(ValueError(PATIENT))
+        # What asyncio logs for a task whose exception nobody retrieved: the message holds the
+        # future's repr, and with it the exception's.
+        loop.default_exception_handler(
+            {
+                "message": "Task exception was never retrieved",
+                "exception": future.exception(),
+                "future": future,
+            }
+        )
+    finally:
+        loop.close()
+    try:
+        raise_chained_os_error()
+    except RuntimeError as exc:
+        logging.getLogger("uvicorn.error").error(f"Failed for\n{PATIENT}", exc_info=exc)
+
+    from_asyncio, multiline = records(log_file)[-2:]
+    assert (from_asyncio["event"], from_asyncio["logger"]) == (WITHHELD_MESSAGE, "asyncio")
+    assert "ValueError" in from_asyncio["exception"]
+    assert (multiline["event"], multiline["logger"]) == (WITHHELD_MESSAGE, "uvicorn.error")
+    assert "RuntimeError" in multiline["exception"]
+    for output in (log_file.read_text(encoding="utf-8"), stderr_text()):
+        assert PATIENT not in output
 
 
 def test_tracebacks_in_stdlib_messages_are_withheld(

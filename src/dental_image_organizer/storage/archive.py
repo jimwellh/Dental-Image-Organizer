@@ -51,6 +51,10 @@ MAX_JSON_BYTES = 16 * 1024 * 1024
 _CHUNK = 1024 * 1024
 _ORIGINAL = re.compile(ORIGINAL_FILE_PATTERN)
 _MISMATCH = "The archive is damaged: a photo does not match its record."
+_LINKED_ORIGINAL = (
+    "An original photo of this case is a link to a file elsewhere; "
+    "put the photo itself in the case's originals folder."
+)
 # Everything a damaged or hostile member can raise while it is being read.
 _READ_ERRORS = (
     zipfile.BadZipFile,
@@ -74,6 +78,7 @@ def write_case_archive(case_dir: Path, out: Path) -> None:
     patient_json = (case_dir.parent / PATIENT_FILE).read_bytes()
     case_json = (case_dir / CASE_FILE).read_bytes()
     case = parse_case(case_json)
+    inside = case_dir.resolve()
     # Written beside `out` and replaced into it, so a crash never leaves half a zip.
     tmp = out.with_name(f".{out.name}.{uuid4().hex[:8]}.tmp")
     try:
@@ -83,8 +88,13 @@ def write_case_archive(case_dir: Path, out: Path) -> None:
                 zf.writestr(CASE_FILE, case_json, compress_type=zipfile.ZIP_DEFLATED)
                 # Originals are JPEG/HEIC/PNG already, so deflating them only costs time.
                 for name in dict.fromkeys(p.file for p in case.photos):
+                    source = case_dir / name
+                    # A link, of the file or of its folder, would pack a file from elsewhere on
+                    # the disk into an archive that is made to be passed on.
+                    if source.is_symlink() or not source.resolve().is_relative_to(inside):
+                        raise StorageError(_LINKED_ORIGINAL)
                     try:
-                        zf.write(case_dir / name, name, compress_type=zipfile.ZIP_STORED)
+                        zf.write(source, name, compress_type=zipfile.ZIP_STORED)
                     except FileNotFoundError as exc:
                         raise StorageError(
                             "An original photo of this case is missing from its folder."

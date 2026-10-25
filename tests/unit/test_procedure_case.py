@@ -543,6 +543,8 @@ def test_processing_logs_never_name_the_patient(ctx: AppContext, photos: Procedu
     assert any(entry.get("photo_id") for entry in logs)
     unreadable = [entry for entry in logs if entry["event"] == "photo_unreadable"]
     assert [entry["photo_id"] for entry in unreadable] == [broken]
+    # A domain error is logged by its code; its message goes to the user only.
+    assert [(entry["code"], "error" in entry) for entry in unreadable] == [("corrupt_image", False)]
     for entry in logs:
         assert "Alex Wang" not in repr(entry)
         assert "implant" not in repr(entry)

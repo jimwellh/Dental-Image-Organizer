@@ -9,7 +9,7 @@ copies and holds the case lock for about 0.6 s.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +22,7 @@ from dental_image_organizer.core import transform as tf
 from dental_image_organizer.core.geometry import normalize_view
 from dental_image_organizer.core.imageio import RGBImage
 from dental_image_organizer.core.slots import SLOTS, Flip, Slot
-from dental_image_organizer.errors import InvalidRequestError, NotReadyError
+from dental_image_organizer.errors import InvalidRequestError, NotReadyError, StorageError
 from dental_image_organizer.ml.assignment import (
     LOW_CONFIDENCE,
     Assignment,
@@ -39,7 +39,7 @@ from dental_image_organizer.services.batch_io import (
     os_error_message,
 )
 from dental_image_organizer.services.composite import DEFAULT_BASELINE, fit_cell_colors
-from dental_image_organizer.services.flips import effective_flips
+from dental_image_organizer.services.flips import FlipConfirmation, effective_flips
 from dental_image_organizer.services.intake import Upload, UploadOutcome, add_photos
 from dental_image_organizer.services.jobs import JobProgress, JobSnapshot
 from dental_image_organizer.services.originals import photo_embedding, working_copy
@@ -128,15 +128,16 @@ def process_photos(
         proposal = _propose(ctx, case) if _block(case).slots_source == "auto" else None
         applied: list[_Proposal] = []
 
-        def change(case: CaseRecord) -> CaseRecord:
+        def change(case: CaseRecord, defaults: Mapping[Slot, Flip]) -> CaseRecord:
             applied.clear()
             # The dentist may have set the slots meanwhile, while the photos were embedded.
             if proposal is not None and _block(case).slots_source == "auto":
                 applied.append(proposal)
-                return replan(ctx, _placed(case, proposal.slots), confidences=proposal.confidences)
-            return replan(ctx, case)
+                placed = _placed(case, proposal.slots)
+                return replan(ctx, placed, defaults, confidences=proposal.confidences)
+            return replan(ctx, case, defaults)
 
-        updated = ctx.library().update_case(case_id, change)
+        updated = _replanned(ctx, case_id, change)
         records = {p.id: p for p in updated.photos}
         processed = [records[i] for i in wanted if i in records]
         log.info(
@@ -185,12 +186,13 @@ def _auto_assign(ctx: AppContext, case_id: str) -> dict[str, Any]:
     with bound_contextvars(case_id=case_id):
         proposal = _propose(ctx, _read(ctx, case_id))
 
-        def change(case: CaseRecord) -> CaseRecord:
+        def change(case: CaseRecord, defaults: Mapping[Slot, Flip]) -> CaseRecord:
             cleared = [p.model_copy(update={"edit": None}) for p in case.photos]
             fresh = _with_source(case.model_copy(update={"photos": cleared}), "auto")
-            return replan(ctx, _placed(fresh, proposal.slots), confidences=proposal.confidences)
+            placed = _placed(fresh, proposal.slots)
+            return replan(ctx, placed, defaults, confidences=proposal.confidences)
 
-        ctx.library().update_case(case_id, change)
+        _replanned(ctx, case_id, change)
         log.info("slots_assigned", method=proposal.method, reason=proposal.reason)
         return proposal.summary()
 
@@ -259,7 +261,7 @@ def set_slots(ctx: AppContext, case_id: str, slots: Mapping[Slot, str]) -> CaseR
     """Place exactly the photos of `slots`; every other member goes to the tray."""
     wanted = dict(slots)
 
-    def change(case: CaseRecord) -> CaseRecord:
+    def change(case: CaseRecord, defaults: Mapping[Slot, Flip]) -> CaseRecord:
         _block(case)
         ids = list(wanted.values())
         if len(set(ids)) != len(ids):
@@ -267,16 +269,16 @@ def set_slots(ctx: AppContext, case_id: str, slots: Mapping[Slot, str]) -> CaseR
         if not set(ids) <= {p.id for p in case.photos if p.state == "ready"}:
             raise InvalidRequestError(_NOT_PLACEABLE_MESSAGE)
         by_photo = {photo_id: slot for slot, photo_id in wanted.items()}
-        return replan(ctx, _placed(_with_source(case, "manual"), by_photo))
+        return replan(ctx, _placed(_with_source(case, "manual"), by_photo), defaults)
 
     with bound_contextvars(case_id=case_id):
-        return ctx.library().update_case(case_id, change)
+        return _replanned(ctx, case_id, change)
 
 
 def move_photo(ctx: AppContext, case_id: str, photo_id: str, slot: Slot | None) -> CaseRecord:
     """Drag-to-swap: the photo in `slot` takes the mover's old slot, or the tray."""
 
-    def change(case: CaseRecord) -> CaseRecord:
+    def change(case: CaseRecord, defaults: Mapping[Slot, Flip]) -> CaseRecord:
         _block(case)
         if case.photo(photo_id).state != "ready":
             raise InvalidRequestError(_NOT_PLACEABLE_MESSAGE)
@@ -286,60 +288,63 @@ def move_photo(ctx: AppContext, case_id: str, photo_id: str, slot: Slot | None) 
         mover = next(i for i, p in enumerate(photos) if p.id == photo_id)
         moved = with_overrides(current, {mover: slot})
         by_photo = {p.id: s for p, s in zip(photos, moved.slots, strict=True) if s is not None}
-        return replan(ctx, _placed(_with_source(case, "manual"), by_photo))
+        return replan(ctx, _placed(_with_source(case, "manual"), by_photo), defaults)
 
     with bound_contextvars(case_id=case_id, photo_id=photo_id):
-        return ctx.library().update_case(case_id, change)
+        return _replanned(ctx, case_id, change)
 
 
 def set_flip(ctx: AppContext, case_id: str, photo_id: str, flip: Flip) -> CaseRecord:
-    def change(case: CaseRecord) -> CaseRecord:
+    def change(case: CaseRecord, defaults: Mapping[Slot, Flip]) -> CaseRecord:
         photo, edit = _placed_photo(case, photo_id)
         # The geometry is recomputed from the new flip, so manual pan and zoom are reset.
         flipped = edit.model_copy(update={"flip": flip, "source": "auto"})
-        return replan(ctx, case.replace_photo(photo.model_copy(update={"edit": flipped})))
+        flipped_case = case.replace_photo(photo.model_copy(update={"edit": flipped}))
+        return replan(ctx, flipped_case, defaults)
 
     with bound_contextvars(case_id=case_id, photo_id=photo_id):
-        return ctx.library().update_case(case_id, change)
+        return _replanned(ctx, case_id, change)
 
 
 def apply_manual_edit(
     ctx: AppContext, case_id: str, photo_id: str, transform: Sequence[float]
 ) -> CaseRecord:
-    def change(case: CaseRecord) -> CaseRecord:
+    def change(case: CaseRecord, defaults: Mapping[Slot, Flip]) -> CaseRecord:
         photo, edit = _placed_photo(case, photo_id)
         # Without a reference there is no perspective to correct (spec §4.7.2 step 4).
         matrix = validate_transform(transform, "similarity", _block(case).cell_size)
         manual = edit.model_copy(update={"transform": _flat(matrix), "source": "manual"})
         # Replanned rather than stored as is: the cell's colors are fitted to what it now shows.
-        return replan(ctx, case.replace_photo(photo.model_copy(update={"edit": manual})))
+        edited = case.replace_photo(photo.model_copy(update={"edit": manual}))
+        return replan(ctx, edited, defaults)
 
     with bound_contextvars(case_id=case_id, photo_id=photo_id):
-        return ctx.library().update_case(case_id, change)
+        return _replanned(ctx, case_id, change)
 
 
 def reset_edit(ctx: AppContext, case_id: str, photo_id: str) -> CaseRecord:
     """Reset one cell to auto: the slot's default flip and automatic geometry (§4.8)."""
 
-    def change(case: CaseRecord) -> CaseRecord:
+    def change(case: CaseRecord, defaults: Mapping[Slot, Flip]) -> CaseRecord:
         photo, _ = _placed_photo(case, photo_id)
-        return replan(ctx, case.replace_photo(photo.model_copy(update={"edit": None})))
+        reset = case.replace_photo(photo.model_copy(update={"edit": None}))
+        return replan(ctx, reset, defaults)
 
     with bound_contextvars(case_id=case_id, photo_id=photo_id):
-        return ctx.library().update_case(case_id, change)
+        return _replanned(ctx, case_id, change)
 
 
 def set_layout(ctx: AppContext, case_id: str, layout: CompositeRecord) -> CaseRecord:
     """Change the cell size, gap, and baseline; how the slots were set stays as it is."""
 
-    def change(case: CaseRecord) -> CaseRecord:
+    def change(case: CaseRecord, defaults: Mapping[Slot, Flip]) -> CaseRecord:
         current = _block(case)
         _check_layout(case, layout)
         kept = layout.model_copy(update={"slots_source": current.slots_source})
-        return replan(ctx, case.model_copy(update={"composite": kept}))
+        return replan(ctx, case.model_copy(update={"composite": kept}), defaults)
 
     with bound_contextvars(case_id=case_id):
-        return ctx.library().update_case(case_id, change)
+        return _replanned(ctx, case_id, change)
 
 
 def _check_layout(case: CaseRecord, layout: CompositeRecord) -> None:
@@ -359,22 +364,39 @@ def _check_layout(case: CaseRecord, layout: CompositeRecord) -> None:
 # -- planning ------------------------------------------------------------------------------
 
 
+def _replanned(
+    ctx: AppContext,
+    case_id: str,
+    change: Callable[[CaseRecord, Mapping[Slot, Flip]], CaseRecord],
+) -> CaseRecord:
+    """Apply `change`, which replans, with the flip defaults it needs.
+
+    They are read before the case lock: reading them waits while training holds the AI lock,
+    and the case's other changes must not wait along.
+    """
+    defaults = composite_flips(ctx)
+    return ctx.library().update_case(case_id, lambda case: change(case, defaults))
+
+
 def replan(
-    ctx: AppContext, case: CaseRecord, *, confidences: Mapping[str, float | None] = {}
+    ctx: AppContext,
+    case: CaseRecord,
+    defaults: Mapping[Slot, Flip],
+    *,
+    confidences: Mapping[str, float | None] = {},
 ) -> CaseRecord:
     """Plan every placed cell again: geometry, then colors across the cells (§4.7).
 
-    Call it inside `update_case`. A manual cell keeps its transform; a photo whose geometry or
-    color fit raises fails alone and leaves its cell empty. `confidences` replaces the stored
-    confidence of the photos it names.
+    Call it inside `update_case`, with the `composite_flips` read before it (see `_replanned`).
+    A manual cell keeps its transform; a photo whose geometry or color fit raises fails alone
+    and leaves its cell empty. `confidences` replaces the stored confidence of the photos it
+    names.
     """
     cell_size = _block(case).cell_size
     placed = sorted(
         (p for p in case.photos if p.state == "ready" and p.slot is not None),
         key=lambda p: SLOTS.index(p.slot),
     )
-    # Read only when needed: a damaged flip history must not block replans that never use it.
-    defaults = composite_flips(ctx) if any(_flip(p) is None for p in placed) else {}
     images: list[RGBImage] = []
     slot_map: dict[Slot, int] = {}
     transforms: dict[Slot, tf.Matrix] = {}
@@ -451,9 +473,24 @@ def replan(
 
 
 def composite_flips(ctx: AppContext) -> dict[Slot, Flip]:
-    """The flip each slot starts from: its pin, else the learned flip, else the start value."""
-    # flip_history reads under the AI lock: on Windows a read racing a write of flips.json fails.
-    return effective_flips(ctx.settings.get(), ctx.ai.flip_history())
+    """The flip each slot starts from: its pin, else the learned flip, else the start value.
+
+    Never call it holding a case lock: it waits while training holds the AI lock.
+    """
+    history, _ = flip_history(ctx)
+    return effective_flips(ctx.settings.get(), history)
+
+
+def flip_history(ctx: AppContext) -> tuple[tuple[FlipConfirmation, ...], str | None]:
+    """The flip confirmations, or none and the reason when flips.json is damaged."""
+    try:
+        # Under the AI lock: on Windows a read racing a write of flips.json fails.
+        return ctx.ai.flip_history(), None
+    except StorageError as exc:
+        # The history only refines defaults, so planning goes on from the pins and start
+        # values; the classifier screen shows the damage.
+        log.warning("flip_history_damaged", code=exc.code)
+        return (), str(exc)
 
 
 def composite_block(settings: Settings) -> CompositeRecord:

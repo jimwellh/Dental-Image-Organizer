@@ -369,10 +369,17 @@ class ClassifierView(BaseModel):
     damaged: str | None
     model_available: bool
     flips: dict[Slot, FlipStatusView]
+    # Why flips.json could not be read; `flips` then shows the pins and start values in use.
+    flips_damaged: str | None
 
     @classmethod
     def of(
-        cls, status: ClassifierStatus, flips: dict[Slot, FlipStatus], *, min_samples: int
+        cls,
+        status: ClassifierStatus,
+        flips: dict[Slot, FlipStatus],
+        *,
+        flips_damaged: str | None,
+        min_samples: int,
     ) -> ClassifierView:
         return cls(
             trained=status.trained,
@@ -382,6 +389,7 @@ class ClassifierView(BaseModel):
             damaged=status.damaged,
             model_available=status.model_available,
             flips={slot: FlipStatusView.of(flip) for slot, flip in flips.items()},
+            flips_damaged=flips_damaged,
         )
 
 

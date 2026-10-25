@@ -585,6 +585,11 @@ same original-minus-mirror feature; this is an independent re-implementation.
      - Confirmation history and learned values live in `classifier/flips.json`.
      - The effective default of a slot is its pin if set, otherwise its learned value (≥ 3
        confirmations), otherwise its starting value.
+     - A damaged `flips.json` only costs the learned values: planning and case views fall back
+       to pins and starting values, and `GET /classifier/status` reports the damage in
+       `flips_damaged`. Recording new confirmations still fails, since nothing can be merged
+       into the damaged file: an export reports it as a learning failure, and teaching's
+       confirm as an error.
    - The flip is learned per slot rather than predicted per photo. A mirrored right-side view
      looks like a direct left-side view, so appearance alone cannot tell a mirror shot from the
      opposite side. Per-slot learning follows the dentist's habits instead.

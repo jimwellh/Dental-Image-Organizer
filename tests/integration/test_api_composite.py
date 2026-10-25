@@ -11,8 +11,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from structlog.testing import capture_logs
 
-from dental_image_organizer.core.slots import SLOTS
+from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS
 from dental_image_organizer.ml.samples import SampleStore
 from dental_image_organizer.services.context import AppContext
 from support.app import make_context, view_set
@@ -23,6 +24,9 @@ Files = list[tuple[str, bytes]]
 
 ROW_MAJOR = {f"IMG_{i + 1:04d}.jpg": slot for i, slot in enumerate(SLOTS)}
 COMPOSITE = "Alex Wang_full mouth_Composite_20261016.jpg"
+FLIPS_DAMAGED = (
+    "The flip history is damaged; move flips.json out of the classifier folder to start over."
+)
 
 
 @pytest.fixture
@@ -111,6 +115,36 @@ def test_composite_flow(
     samples = SampleStore(ctx.dirs.classifier).load()
     assert len(samples.slots) == 9
     assert set(samples.sources) == {"export"}
+
+
+def test_a_damaged_flip_history_falls_back_to_the_start_flips(
+    client: TestClient, ctx: AppContext, nine: Files, wait_job: WaitJob
+) -> None:
+    damaged = ctx.dirs.classifier / "flips.json"
+    damaged.parent.mkdir(parents=True, exist_ok=True)
+    damaged.write_bytes(b"{")
+
+    with capture_logs() as logs:
+        case_id = _composite(client, nine, wait_job)
+        view = client.get(f"/api/cases/{case_id}")
+
+    assert view.status_code == 200
+    assert view.json()["flip_defaults"] == DEFAULT_FLIPS
+    case = view.json()["case"]
+    assert _slots(case) == ROW_MAJOR
+    assert {p["slot"]: p["edit"]["flip"] for p in case["photos"]} == DEFAULT_FLIPS
+    warnings = [e for e in logs if e["event"] == "flip_history_damaged"]
+    assert warnings and all(e["code"] == "storage_error" for e in warnings)
+    status = client.get("/api/classifier/status").json()
+    assert status["flips_damaged"] == FLIPS_DAMAGED
+    assert {slot: f["effective"] for slot, f in status["flips"].items()} == DEFAULT_FLIPS
+
+    started = client.post(f"/api/cases/{case_id}/export", json={})
+
+    learning = wait_job(started.json()["job_id"])["result"]["learning"]
+    assert learning == {"error": "failed", "message": FLIPS_DAMAGED}
+    assert (ctx.library().export_dir(case_id) / COMPOSITE).is_file()
+    assert damaged.read_bytes() == b"{"
 
 
 def test_reassign_returns_to_automatic_slots(

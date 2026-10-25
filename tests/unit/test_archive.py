@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dental_image_organizer.errors import CaseExistsError, InvalidArchiveError
+from dental_image_organizer.errors import CaseExistsError, InvalidArchiveError, StorageError
 from dental_image_organizer.storage import archive
 from dental_image_organizer.storage.archive import import_case_archive, write_case_archive
 from dental_image_organizer.storage.library import CaseLocks, Library
@@ -108,6 +108,36 @@ def test_archive_holds_only_referenced_originals(source: Library, tmp_path: Path
         kinds = {i.filename: i.compress_type for i in zf.infolist()}
     assert kinds["case.json"] == zipfile.ZIP_DEFLATED
     assert kinds[case.photos[0].file] == zipfile.ZIP_STORED
+
+
+@pytest.mark.parametrize("linked", ["file", "folder"])
+def test_an_original_linked_from_outside_the_case_is_refused(
+    source: Library, tmp_path: Path, linked: str
+) -> None:
+    case = build_case(source)
+    folder = source.case_dir(case.id)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_bytes(b"not a photo of this case")
+    original = folder / case.photos[0].file
+    try:
+        if linked == "file":
+            original.unlink()
+            original.symlink_to(secret)
+        else:
+            moved = outside / "originals"
+            (folder / "originals").rename(moved)
+            (folder / "originals").symlink_to(moved, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not permitted on this host")
+    zip_path = tmp_path / "case.zip"
+
+    with pytest.raises(StorageError, match="is a link to a file elsewhere"):
+        write_case_archive(folder, zip_path)
+
+    assert not zip_path.exists()
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".case.zip")] == []
 
 
 def test_conflict_policies(source: Library, target: Library, tmp_path: Path) -> None:

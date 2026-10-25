@@ -263,7 +263,8 @@ def _process_reference(ctx: AppContext, case_id: str, reference: PhotoRecord) ->
         try:
             size = output_size(decoded.size, _scale(case))
         except OutputTooLargeError as exc:
-            log.warning("reference_too_large", error=str(exc))
+            # By code: the message goes to the user only (spec §4.13).
+            log.warning("reference_too_large", code=exc.code)
             updated = _failed(updated, str(exc))
         else:
             ready = {"state": "ready", "error": None, "edit": reference_edit(size)}
@@ -316,7 +317,7 @@ def decode_photo(
         decoded = decode_original(ctx, case_id, photo)
         remember_working(ctx, photo.sha256, decoded.rgb)
     except CorruptImageError as exc:
-        log.error("photo_unreadable", error=str(exc))
+        log.error("photo_unreadable", code=exc.code)
         return None, str(exc)
     except OSError as exc:
         log.error("photo_unreadable", error=os_error_message(exc))

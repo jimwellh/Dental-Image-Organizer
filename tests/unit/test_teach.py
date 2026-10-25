@@ -10,8 +10,9 @@ from typing import Any
 
 import pytest
 from PIL import Image
+from structlog.testing import capture_logs
 
-from dental_image_organizer.core.imageio import RGBImage
+from dental_image_organizer.core.imageio import DecodedImage, RGBImage
 from dental_image_organizer.core.slots import SLOTS
 from dental_image_organizer.errors import (
     InvalidRequestError,
@@ -21,6 +22,7 @@ from dental_image_organizer.errors import (
 )
 from dental_image_organizer.ml.embedder import EmbeddingPair
 from dental_image_organizer.ml.samples import SampleStore
+from dental_image_organizer.services import teach
 from dental_image_organizer.services.context import AppContext
 from dental_image_organizer.services.teach import TeachSession
 from support.app import make_context, upload, view_set, wait
@@ -102,6 +104,32 @@ def test_cancel_while_processing_does_not_bring_the_folder_back(
     assert list(taught.dirs.teach.iterdir()) == []
     with pytest.raises(TeachSessionNotFoundError):
         taught.teach.get(session.id)
+
+
+def test_a_photo_that_fails_to_decode_is_logged_by_its_type_only(
+    taught: AppContext, nine: Files, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patient = " ".join(["Alex", "Wang"])
+    real_decode = teach.decode
+    calls: list[None] = []
+
+    def decode(data: bytes) -> DecodedImage:
+        calls.append(None)
+        if len(calls) == 2:
+            raise RuntimeError(patient)
+        return real_decode(data)
+
+    monkeypatch.setattr(teach, "decode", decode)
+
+    with capture_logs() as logs:
+        session = _start(taught, nine)
+
+    [failed] = [p for p in session.photos if p.state == "failed"]
+    # The message goes to the user; the log only says what kind of failure it was.
+    assert failed.error == f"Unexpected RuntimeError: {patient}"
+    unreadable = [e for e in logs if e["event"] == "photo_unreadable"]
+    assert [(e["photo_id"], e["error"]) for e in unreadable] == [(failed.id, "RuntimeError")]
+    assert patient not in repr(logs)
 
 
 def test_teaching_needs_the_model(ctx: AppContext, nine: Files) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -300,6 +302,29 @@ def test_learned_flips_are_the_defaults(ctx: AppContext, nine: Files) -> None:
 
     assert composite_case.composite_flips(ctx)["upper_right"] == "none"
     assert _edit(_cell(_read(ctx, case_id), "upper_right")).flip == "none"
+
+
+def test_a_cell_edit_waiting_for_training_leaves_the_case_unlocked(
+    ctx: AppContext, nine: Files
+) -> None:
+    case_id = _case(ctx)
+    _upload(ctx, case_id, nine)
+    cell = _cell(_read(ctx, case_id), "upper_right")
+    # A reset needs the flip defaults, which wait while training holds the AI lock.
+    resetting = threading.Thread(target=composite_case.reset_edit, args=(ctx, case_id, cell.id))
+    other = threading.Thread(target=ctx.library().update_case, args=(case_id, lambda case: case))
+
+    with ctx.ai.lock:
+        resetting.start()
+        time.sleep(0.3)
+        other.start()
+        other.join(10)
+        assert not other.is_alive()
+        assert resetting.is_alive()
+    resetting.join(30)
+
+    assert not resetting.is_alive()
+    assert _edit(_cell(_read(ctx, case_id), "upper_right")).source == "auto"
 
 
 def test_a_trained_classifier_assigns(tmp_path: Path, nine: Files) -> None:

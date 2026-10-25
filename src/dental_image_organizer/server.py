@@ -104,6 +104,11 @@ def serve(*, port: int | None, open_browser: bool, verbose: bool = False) -> int
         return _defer_to_running(dirs, open_browser=open_browser)
     try:
         return _serve_locked(dirs, port=port, open_browser=open_browser)
+    except Exception:
+        # A detached server has no console, and --detach points to dio.log; the trace is
+        # sanitized there like every other (spec §4.13).
+        log.exception("server_crashed")
+        raise
     finally:
         lock.release()
 

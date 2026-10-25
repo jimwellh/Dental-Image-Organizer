@@ -172,6 +172,21 @@ def test_uploads_need_a_bounded_length(client: TestClient, monkeypatch: pytest.M
     assert _error(too_large)["message"] == "Uploads are limited to 2 GiB per request."
 
 
+def test_a_too_large_archive_points_to_the_cli(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(security, "MAX_REQUEST_BYTES", 10)
+
+    response = client.post("/api/archive/import", files={"file": ("a.zip", b"0123456789")})
+
+    assert response.status_code == 413
+    assert _error(response) == {
+        "code": "request_too_large",
+        "message": "Archives over 2 GiB can be imported with dio import-case.",
+        "details": None,
+    }
+
+
 def test_errors_have_one_shape(client: TestClient) -> None:
     settings = client.get("/api/settings").json()
     with capture_logs() as logs:

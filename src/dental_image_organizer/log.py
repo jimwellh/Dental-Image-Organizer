@@ -15,7 +15,7 @@ from structlog.typing import EventDict, ExcInfo, Processor
 APP_LOGGER = "dental_image_organizer"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUPS = 4
-WITHHELD_MESSAGE = "message withheld: it held a traceback, which carries exception messages"
+WITHHELD_MESSAGE = "message withheld: it held a traceback or an exception's text"
 
 # Also matches "Exception Group Traceback (most recent call last):".
 _TRACEBACK = "Traceback (most recent call last):"
@@ -94,16 +94,22 @@ def _formatter(shared: list[Processor], renderer: Processor) -> logging.Formatte
 
 
 def _withhold_tracebacks(_logger: object, _name: str, event_dict: EventDict) -> EventDict:
-    """A stdlib record whose message holds a traceback loses that message.
+    """A stdlib record whose message holds a traceback, or an exception's text, loses it.
 
     Starlette reports a failed lifespan as `traceback.format_exc()` text, which uvicorn logs as
     a plain message: the exception messages and source lines in it would bypass
-    `format_exception_safely`. A stack is dropped for the same reason.
+    `format_exception_safely`. asyncio's default handler ("Task exception was never
+    retrieved", "Exception in callback ...") puts the task or handle, with the exception's
+    repr, into the message. The exception itself stays, for the sanitizer. A stack is dropped
+    for the same reason.
     """
     event_dict.pop("stack_info", None)
-    if _TRACEBACK in str(event_dict.get("event", "")):
+    record: logging.LogRecord = event_dict["_record"]
+    message = str(event_dict.get("event", ""))
+    reported = event_dict.get("exc_info") and (record.name == "asyncio" or "\n" in message)
+    if _TRACEBACK in message or reported:
         event_dict["event"] = WITHHELD_MESSAGE
-        event_dict["logger"] = event_dict["_record"].name
+        event_dict["logger"] = record.name
     return event_dict
 
 

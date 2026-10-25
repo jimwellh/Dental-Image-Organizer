@@ -11,6 +11,10 @@ from dental_image_organizer.api.errors import error_response
 
 MAX_REQUEST_BYTES = 2 * 1024**3
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+ARCHIVE_IMPORT_PATH = "/api/archive/import"
+TOO_LARGE_MESSAGE = "Uploads are limited to 2 GiB per request."
+# The CLI reads the archive from disk, so the request limit does not apply to it.
+ARCHIVE_TOO_LARGE_MESSAGE = "Archives over 2 GiB can be imported with dio import-case."
 
 
 class LocalRequestGuard:
@@ -44,7 +48,7 @@ class LocalRequestGuard:
         if not (length.isascii() and length.isdigit()):
             return error_response(411, "length_required", "Uploads need a Content-Length.")
         if int(length) > MAX_REQUEST_BYTES:
-            return error_response(
-                413, "request_too_large", "Uploads are limited to 2 GiB per request."
-            )
+            archive = scope["path"] == ARCHIVE_IMPORT_PATH
+            message = ARCHIVE_TOO_LARGE_MESSAGE if archive else TOO_LARGE_MESSAGE
+            return error_response(413, "request_too_large", message)
         return None
