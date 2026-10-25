@@ -31,6 +31,7 @@ from dental_image_organizer.instance import (
 )
 from dental_image_organizer.log import configure_logging
 from dental_image_organizer.paths import AppDirs, app_dirs
+from dental_image_organizer.services.cases import resume_pending
 from dental_image_organizer.services.context import create_context
 
 log = structlog.get_logger(__name__)
@@ -218,6 +219,8 @@ def _serve_locked(dirs: AppDirs, *, port: int | None, open_browser: bool) -> int
             return 1
         with sock:
             bound: int = sock.getsockname()[1]
+            # After the bind, so a start that fails on its port quits without processing first.
+            resume_pending(ctx)
             # Kept after exit: the next run tries this port first.
             write_instance(
                 dirs.instance_file,

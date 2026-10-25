@@ -41,7 +41,7 @@ from dental_image_organizer.services.batch_io import (
 from dental_image_organizer.services.composite import DEFAULT_BASELINE, fit_cell_colors
 from dental_image_organizer.services.flips import effective_flips
 from dental_image_organizer.services.intake import Upload, UploadOutcome, add_photos
-from dental_image_organizer.services.jobs import JobProgress
+from dental_image_organizer.services.jobs import JobProgress, JobSnapshot
 from dental_image_organizer.services.originals import photo_embedding, working_copy
 from dental_image_organizer.services.procedure_case import (
     decode_photo,
@@ -97,13 +97,19 @@ def upload(ctx: AppContext, case_id: str, uploads: Sequence[Upload]) -> UploadOu
     added, skipped = add_photos(ctx, case_id, uploads, role="member")
     if not added:
         return UploadOutcome(None, (), tuple(skipped))
-    ids = tuple(added)
+    job = submit_processing(ctx, case_id, added)
+    return UploadOutcome(job.id, tuple(added), tuple(skipped))
+
+
+def submit_processing(ctx: AppContext, case_id: str, photo_ids: Sequence[str]) -> JobSnapshot:
+    """Queue the `process` job of the photos: after an upload, or for photos a closed or
+    crashed run left pending."""
+    ids = tuple(photo_ids)
 
     def run(progress: JobProgress) -> dict[str, Any]:
         return process_photos(ctx, case_id, ids, progress)
 
-    job = ctx.jobs.submit("process", run, key=case_id, total=len(ids))
-    return UploadOutcome(job.id, ids, tuple(skipped))
+    return ctx.jobs.submit("process", run, key=case_id, total=len(ids))
 
 
 def process_photos(

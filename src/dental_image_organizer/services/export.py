@@ -5,11 +5,12 @@ Pixels are rendered from a snapshot of the case read without a lock, and each fi
 hidden part file as soon as it is encoded, so encoded JPEGs never pile up in memory. Only naming,
 moving the parts into place, and recording them in `case.exports` hold the case lock. A file the
 app did not write is never deleted or overwritten: "Replace previous export" removes only what
-`case.exports` records (spec amendment 4).
+`case.exports` records (spec amendment 4), and only while it still holds the bytes written then.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -99,6 +100,7 @@ class _Part:
     """An encoded file in the export folder under a hidden name, waiting for its real one."""
 
     hidden: str
+    sha256: str
     name: str
     kind: ExportKind
     photo_id: str | None
@@ -292,20 +294,23 @@ def _single(source: _Source, photo: PhotoRecord) -> _Part:
     name = photo_filename(source.patient, source.case.title, _captured(photo))
     decoded = decode_original(source.ctx, source.case.id, photo)
     image = render_full(photo, decoded.rgb)
-    return _Part(_write_part(source, image, decoded.metadata), name, "single", photo.id)
+    hidden, sha256 = _write_part(source, image, decoded.metadata)
+    return _Part(hidden, sha256, name, "single", photo.id)
 
 
 def _sequence(source: _Source) -> _Part:
     image = sequence_strip(source.ctx, source.case, full=True)
     name = sequence_filename(source.patient, source.case.title, source.today)
-    return _Part(_write_part(source, image), name, "sequence", None)
+    hidden, sha256 = _write_part(source, image)
+    return _Part(hidden, sha256, name, "sequence", None)
 
 
 def _composite(source: _Source) -> _Part:
     image = composite_grid(source.ctx, source.case, full=True)
     dates = [p.captured_at.date() for _, p, _ in _cells(source.case) if p.captured_at is not None]
     name = composite_filename(source.patient, source.case.title, composite_capture_date(dates))
-    return _Part(_write_part(source, image), name, "composite", None)
+    hidden, sha256 = _write_part(source, image)
+    return _Part(hidden, sha256, name, "composite", None)
 
 
 def _captured(photo: PhotoRecord) -> datetime:
@@ -315,7 +320,10 @@ def _captured(photo: PhotoRecord) -> datetime:
     return photo.captured_at
 
 
-def _write_part(source: _Source, image: RGBImage, metadata: Metadata | None = None) -> str:
+def _write_part(
+    source: _Source, image: RGBImage, metadata: Metadata | None = None
+) -> tuple[str, str]:
+    """The hidden name of the part file, and the SHA-256 of its bytes."""
     settings = source.settings
     data = encode_jpeg(image, metadata, quality=settings.jpeg_quality, strip_gps=settings.strip_gps)
     # Hidden and random, so it can clash neither with the dentist's files nor with real names.
@@ -330,7 +338,7 @@ def _write_part(source: _Source, image: RGBImage, metadata: Metadata | None = No
     except BaseException:
         _discard(path)
         raise
-    return hidden
+    return hidden, hashlib.sha256(data).hexdigest()
 
 
 def _commit(
@@ -360,7 +368,9 @@ def _commit(
                 continue
             taken.add(name)
             written.append(
-                ExportRecord(file=f"{EXPORT_DIR}/{name}", kind=part.kind, created_at=now)
+                ExportRecord(
+                    file=f"{EXPORT_DIR}/{name}", kind=part.kind, created_at=now, sha256=part.sha256
+                )
             )
 
         def record(current: CaseRecord) -> CaseRecord:
@@ -381,7 +391,8 @@ def _commit(
 def _remove_previous(
     library: Library, case: CaseRecord, folder: Path, failures: list[dict[str, Any]]
 ) -> list[ExportRecord]:
-    """Delete the files the case's earlier exports wrote; the records of those that stay."""
+    """Delete the files the case's earlier exports wrote, as they wrote them; the records that
+    stay on record."""
     inside = folder.resolve()
     kept: list[ExportRecord] = []
     for record in case.exports:
@@ -394,6 +405,11 @@ def _remove_previous(
         if path.parent != inside or not path.is_file():
             continue
         try:
+            if record.sha256 is None or _file_sha256(path) != record.sha256:
+                # Edited by the dentist since, or not known to be unchanged: theirs now, so it
+                # stays and its record goes, and no later replace deletes it either.
+                failures.append(_failure(None, _kept_message(path.name, record)))
+                continue
             path.unlink()
         except FileNotFoundError:
             continue
@@ -405,6 +421,17 @@ def _remove_previous(
             message = f"“{path.name}” from an earlier export could not be removed: {reason}."
             failures.append(_failure(None, message))
     return kept
+
+
+def _file_sha256(path: Path) -> str:
+    with path.open("rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def _kept_message(name: str, record: ExportRecord) -> str:
+    if record.sha256 is None:
+        return f"Kept “{name}”: whether it was changed after the export is not known."
+    return f"Kept “{name}”: it was changed after the export."
 
 
 def _names_in(folder: Path) -> set[str]:

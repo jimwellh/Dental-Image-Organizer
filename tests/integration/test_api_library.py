@@ -4,6 +4,7 @@ item 5)."""
 from __future__ import annotations
 
 import io
+import os
 import threading
 import zipfile
 from collections.abc import Callable
@@ -300,6 +301,43 @@ def test_case_archive_round_trip(
     [patient] = listing["patients"]
     assert {c["id"] for c in patient["cases"]} == {case_id, copied.json()["case_id"]}
     assert leftovers == []
+
+
+def test_a_case_moved_to_another_patient_in_finder_follows_its_folder(
+    client: TestClient, ctx: AppContext, tmp_path: Path, wait_job: WaitJob
+) -> None:
+    case_id = _create(client)["case"]["id"]
+    ben = _create(client, "procedure", "crown 26", patient_name="Ben Lee")["patient"]["id"]
+    reference = client.put(
+        f"/api/cases/{case_id}/reference", files={"file": ("ref.jpg", _photo(), "image/jpeg")}
+    )
+    assert reference.status_code == 200, reference.text
+    wait_job(reference.json()["job_id"])
+    folder = ctx.library().case_dir(case_id)
+
+    os.rename(folder, ctx.library().root / "Ben Lee" / folder.name)
+
+    view = client.get(f"/api/cases/{case_id}").json()
+    assert (view["case"]["patient_id"], view["patient"]["name"]) == (ben, "Ben Lee")
+    started = client.post(f"/api/cases/{case_id}/export", json={"include": ["singles"]})
+    exported = wait_job(started.json()["job_id"])["result"]["files"]
+    assert exported == ["export/Ben Lee_implant 16_20261016_1000.jpg"]
+    archive = client.get(f"/api/cases/{case_id}/archive")
+    assert archive.status_code == 200
+    empty = make_context(tmp_path / "empty")
+    try:
+        app = create_app(empty, port=8765, shutdown=lambda: None, web_dir=None)
+        with TestClient(app, base_url=ORIGIN, headers={"Origin": ORIGIN}) as second:
+            files = {"file": ("archive.zip", archive.content, "application/zip")}
+            imported = second.post("/api/archive/import", files=files)
+            listing = second.get("/api/patients").json()
+    finally:
+        empty.close()
+    assert imported.status_code == 201, imported.text
+    assert imported.json()["patient_id"] == ben
+    assert [(p["name"], [c["id"] for c in p["cases"]]) for p in listing["patients"]] == [
+        ("Ben Lee", [case_id])
+    ]
 
 
 def test_damaged_library_entries_are_listed_as_problems(

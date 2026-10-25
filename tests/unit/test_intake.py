@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 import unicodedata
 from collections.abc import Callable
 from datetime import datetime
@@ -14,6 +15,7 @@ import pytest
 from dental_image_organizer.services import intake
 from dental_image_organizer.services.context import AppContext
 from dental_image_organizer.services.intake import Skipped, add_photos, display_name
+from dental_image_organizer.services.jobs import JobProgress
 from dental_image_organizer.storage.library import Library
 from dental_image_organizer.storage.schema import CaseRecord
 from support.app import jpeg, upload
@@ -109,7 +111,10 @@ def test_unsupported_files_are_skipped_with_their_reason(ctx: AppContext) -> Non
 def test_dropping_the_same_photo_again_is_reported_as_duplicate(ctx: AppContext) -> None:
     case_id = _case(ctx)
     a, b, c = _photo(30), _photo(120), _photo(220)
-    add_photos(ctx, case_id, [upload("A.jpg", a), upload("B.jpg", b)], role="photo")
+    first, _ = add_photos(ctx, case_id, [upload("A.jpg", a), upload("B.jpg", b)], role="photo")
+    for photo_id in first:
+        # Processed by their job before the folder is dropped again.
+        _set_state(ctx, case_id, photo_id, state="ready")
 
     added, skipped = add_photos(
         ctx,
@@ -156,6 +161,46 @@ def test_a_failed_photo_dropped_again_is_retried(ctx: AppContext) -> None:
         (second, "B.jpg", "pending", None, None),
     ]
     assert len(_originals(ctx, case_id)) == 2
+
+
+def test_a_pending_photo_without_a_job_dropped_again_is_retried(ctx: AppContext) -> None:
+    case_id = _case(ctx)
+    a = _photo(30)
+    # Recorded, and then the app quit before its job ran: nothing will process it.
+    (first,), _ = add_photos(ctx, case_id, [upload("A.jpg", a)], role="photo")
+
+    added, skipped = add_photos(
+        ctx, case_id, [upload("A again.jpg", a), upload("A copy.jpg", a)], role="photo"
+    )
+
+    case = ctx.library().read_case(case_id)
+    assert added == [first]
+    assert skipped == [Skipped("A copy.jpg", "duplicate", DUPLICATE)]
+    assert [(p.id, p.source_name, p.state) for p in case.photos] == [(first, "A.jpg", "pending")]
+    assert len(_originals(ctx, case_id)) == 1
+
+
+def test_a_pending_photo_dropped_again_while_a_job_runs_is_a_duplicate(ctx: AppContext) -> None:
+    case_id = _case(ctx)
+    a = _photo(30)
+    (first,), _ = add_photos(ctx, case_id, [upload("A.jpg", a)], role="photo")
+    release = threading.Event()
+
+    def hold(progress: JobProgress) -> None:
+        release.wait(30)
+
+    job = ctx.jobs.submit("hold", hold, key=case_id)
+    try:
+        added, skipped = add_photos(ctx, case_id, [upload("A again.jpg", a)], role="photo")
+    finally:
+        release.set()
+    assert ctx.jobs.wait(job.id, 30).state == "done"
+
+    assert added == []
+    assert skipped == [Skipped("A again.jpg", "duplicate", DUPLICATE)]
+    assert [(p.id, p.state) for p in ctx.library().read_case(case_id).photos] == [
+        (first, "pending")
+    ]
 
 
 def test_a_ready_photo_dropped_again_is_still_a_duplicate(ctx: AppContext) -> None:

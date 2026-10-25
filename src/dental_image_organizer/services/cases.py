@@ -191,6 +191,27 @@ def delete_photo(ctx: AppContext, case_id: str, photo_id: str) -> CaseRecord:
         return updated
 
 
+def resume_pending(ctx: AppContext) -> int:
+    """Queue processing for each case whose photos a closed or crashed run left pending.
+
+    Quitting fails the queued jobs and a crash loses them, while their photos stay pending in
+    case.json. The server calls this once at startup; the number of cases queued.
+    """
+    resumed = 0
+    for entry in ctx.library().listing().patients:
+        for case in entry.cases:
+            pending = [p.id for p in case.photos if p.state == "pending"]
+            if not pending:
+                continue
+            if case.type == "composite":
+                composite_case.submit_processing(ctx, case.id, pending)
+            else:
+                procedure_case.resume_processing(ctx, case)
+            resumed += 1
+    log.info("pending_photos_resumed", cases=resumed)
+    return resumed
+
+
 def thumbnails(case: CaseRecord) -> list[str]:
     """Up to four ready photos for the case's card: the reference first and then capture order
     for a procedure case, slot order for a composite case."""

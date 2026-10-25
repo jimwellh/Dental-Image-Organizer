@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -176,6 +177,31 @@ def test_replace_deletes_only_files_the_app_wrote(ctx: AppContext, photos: Proce
     assert theirs.read_bytes() == b"the dentist's own file"
     records = ctx.library().read_case(case_id).exports
     assert sorted(r.file for r in records) == sorted(second["files"])
+
+
+def test_replace_keeps_an_exported_file_the_dentist_changed(
+    ctx: AppContext, photos: ProcedureSet
+) -> None:
+    case_id = _procedure(ctx, photos)
+    _export(ctx, case_id)
+    edited = ctx.library().export_dir(case_id) / SINGLES[1]
+    changed = edited.read_bytes() + b"\x00"
+    edited.write_bytes(changed)
+
+    second = _export(ctx, case_id, "replace")
+
+    assert edited.read_bytes() == changed
+    assert _files(second) == {SINGLES[0], _second(SINGLES[1]), SINGLES[2], _sequence()}
+    assert _on_disk(ctx, case_id) == _files(second) | {SINGLES[1]}
+    assert second["failures"] == [
+        {"photo_id": None, "message": f"Kept “{SINGLES[1]}”: it was changed after the export."}
+    ]
+    records = ctx.library().read_case(case_id).exports
+    assert sorted(r.file for r in records) == sorted(second["files"])
+    folder = ctx.library().export_dir(case_id)
+    for record in records:
+        written = (folder / record.file.removeprefix("export/")).read_bytes()
+        assert record.sha256 == hashlib.sha256(written).hexdigest()
 
 
 def test_exporting_a_composite_again_does_not_count_it_twice(tmp_path: Path, nine: Files) -> None:

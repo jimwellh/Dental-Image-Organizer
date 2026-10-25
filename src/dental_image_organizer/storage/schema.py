@@ -160,6 +160,9 @@ class ExportRecord(_Record):
     file: str = Field(pattern=EXPORT_FILE_PATTERN)
     kind: ExportKind
     created_at: AwareDatetime
+    # Of the bytes written, so "Replace previous export" can tell a file the dentist changed
+    # since; records from before it was kept have none.
+    sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
 
     @field_validator("file")
     @classmethod

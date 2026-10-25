@@ -62,7 +62,9 @@ def _write(ctx: AppContext, case_id: str) -> tuple[Path, str]:
         # originals straight from the folder, and every writer, rename, and deletion of the
         # case takes this lock too.
         with ctx.case_locks.hold(case_id):
-            case = library.read_case(case_id)
+            # The archive copies case.json as it is on disk, so a case moved to another patient
+            # in Finder is saved first: its patient id must match the folder's patient.json.
+            case = library.sync_case_patient(case_id)
             patient = library.patient(case.patient_id).record
             name = case_archive_name(patient.name, case.title, case.created_at.date())
             try:

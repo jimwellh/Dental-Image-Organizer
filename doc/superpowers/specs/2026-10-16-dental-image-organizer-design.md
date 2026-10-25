@@ -650,6 +650,10 @@ all is recorded on the photo itself, because a photo that fails to decode has no
 - `stage_source`: `auto | manual`. The D0 stage rule (§3.2 step 5) never overrides a stage the
   dentist set.
 - `role = "photo"` marks the non-reference photos of a procedure case.
+- Dropping a photo that is already in the case reports it as `duplicate`, with two exceptions
+  that retry it under its own record: a `failed` photo, and a `pending` one while no job of the
+  case is queued or running (Quit or a crash ended the run before its job processed it). At
+  startup the server also queues processing for every photo left `pending`.
 
 **Rendering.** The edit record is applied to an original as follows:
 
@@ -699,6 +703,9 @@ never overwritten silently: the export screen offers "Replace previous export" o
 
 - "Replace previous export" deletes only the files that this case's earlier exports wrote, which
   are recorded in `case.exports`. Then it writes the new files.
+  - Each record holds the SHA-256 of the bytes written. A recorded file whose bytes differ (the
+    dentist edited it), or whose record has no hash, is kept and listed in the export's
+    `failures`, and its record is dropped. The new file then takes `_2`.
 - Files the app did not write are never deleted or overwritten. A new file whose name they
   already use gets `_2`.
 
@@ -789,7 +796,7 @@ the macOS smoke test use it, so they never touch the real folders.
   ],
   "sequence": {"photo_ids": [], "gap_px": 0},
   "composite": null,
-  "exports": [{"file": "export/…jpg", "kind": "single", "created_at": "…"}]
+  "exports": [{"file": "export/…jpg", "kind": "single", "created_at": "…", "sha256": "…"}]
 }
 ```
 
@@ -808,6 +815,8 @@ Field rules:
 - `stage` ∈ `pre_op | intra_op | post_op`, for procedure cases only. `stage_source` ∈
   `auto | manual`: the D0 rule never overrides a `manual` stage.
 - `output_scale` ∈ `1 | 1.5 | 2`, for procedure cases only (§4.8).
+- `patient_id` follows the folder: a case folder moved into another patient's folder in Finder
+  belongs to that patient. Reads report the new id at once, and the next write saves it.
 
 Writes are **atomic**: write `case.json.tmp`, `fsync`, then `os.replace`. Readers validate with
 Pydantic. Unknown future `schema_version` values raise `StorageError` with an upgrade message.

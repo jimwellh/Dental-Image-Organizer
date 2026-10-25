@@ -229,6 +229,8 @@ def _invalid_cases() -> dict[str, dict[str, Any]]:
     for label, gap in (("negative", -1), ("large", 201)):
         add(f"gap_px_{label}", comp, composite={**comp["composite"], "gap_px": gap})
     add("gap_color_name", comp, composite={**comp["composite"], "gap_color": "red"})
+    export = {"file": "export/a.jpg", "kind": "single", "created_at": "2026-10-16T15:00:00+08:00"}
+    add("export_sha256_not_hex", proc, exports=[{**export, "sha256": "x" * 64}])
     for label, size in (("side", [70000, 10]), ("pixels", [20000, 20000])):
         edit = as_doc(proc_case)["photos"][0]["edit"] | {"output_size": size}
         _edit_photo(add(f"output_size_{label}", proc), 0, edit=edit)

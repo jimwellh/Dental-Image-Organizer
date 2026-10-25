@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from structlog.testing import capture_logs
 
 from dental_image_organizer.errors import (
     CaseNotFoundError,
@@ -216,6 +217,49 @@ def test_a_case_folder_renamed_in_finder_is_found_again(lib: Library) -> None:
 
     assert lib.read_case(case.id).id == case.id
     assert lib.case_dir(case.id) == old.with_name("20261016 renamed")
+
+
+def test_a_case_moved_to_another_patient_in_finder_belongs_to_that_patient(lib: Library) -> None:
+    anna = lib.create_patient("Anna", None)
+    ben = lib.create_patient("Ben", None)
+    case = lib.create_case(anna.id, "procedure", "implant 16")
+    old = lib.case_dir(case.id)
+    moved = lib.root / "Ben" / old.name
+
+    os.rename(old, moved)
+
+    with capture_logs() as logs:
+        assert lib.read_case(case.id).patient_id == ben.id
+        listing = lib.listing()
+    assert [(e.record.id, [c.id for c in e.cases]) for e in listing.patients] == [
+        (anna.id, []),
+        (ben.id, [case.id]),
+    ]
+    assert listing.patients[1].cases[0].patient_id == ben.id
+    assert logs == [{"event": "case_reparented", "case_id": case.id, "log_level": "info"}]
+    # Reading never writes; the next change saves the new owner.
+    assert json.loads((moved / "case.json").read_text("utf-8"))["patient_id"] == anna.id
+    lib.update_case(case.id, lambda c: c.model_copy(update={"title": "implant 26"}))
+    assert json.loads((moved / "case.json").read_text("utf-8"))["patient_id"] == ben.id
+
+
+def test_sync_case_patient_saves_a_move_and_nothing_else(lib: Library, clock: Clock) -> None:
+    anna = lib.create_patient("Anna", None)
+    ben = lib.create_patient("Ben", None)
+    case = lib.create_case(anna.id, "procedure", "implant 16")
+    old = lib.case_dir(case.id)
+    os.rename(old, lib.root / "Ben" / old.name)
+    clock.now = NOW + timedelta(hours=1)
+
+    synced = lib.sync_case_patient(case.id)
+
+    path = lib.case_dir(case.id) / "case.json"
+    assert (synced.patient_id, synced.updated_at) == (ben.id, clock.now)
+    assert json.loads(path.read_text("utf-8"))["patient_id"] == ben.id
+    before = path.read_bytes()
+    clock.now = NOW + timedelta(hours=2)
+    assert lib.sync_case_patient(case.id) == synced
+    assert path.read_bytes() == before
 
 
 def test_a_case_folder_deleted_in_finder_is_not_found(lib: Library) -> None:

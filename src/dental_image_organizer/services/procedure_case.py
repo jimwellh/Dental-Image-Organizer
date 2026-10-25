@@ -192,6 +192,17 @@ def remove_unused_original(ctx: AppContext, case_id: str, photo: PhotoRecord) ->
             )
 
 
+def resume_processing(ctx: AppContext, case: CaseRecord) -> JobSnapshot:
+    """Queue the job for the photos that a closed or crashed run left pending."""
+    reference = case.reference()
+    if reference is not None and reference.state == "pending":
+        # Its job was the one set_reference queued: setting it dropped every other photo's
+        # edit, so all of them are aligned again.
+        others = [p.id for p in case.photos if p.id != reference.id]
+        return _submit(ctx, "reference", case.id, [reference.id, *others])
+    return _submit(ctx, "process", case.id, [p.id for p in case.photos if p.state == "pending"])
+
+
 def _submit(ctx: AppContext, kind: str, case_id: str, photo_ids: Sequence[str]) -> JobSnapshot:
     ids = tuple(photo_ids)
 

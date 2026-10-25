@@ -174,6 +174,9 @@ class Library:
         self._patient_dirs: dict[str, Path] = {}
         self._case_dirs: dict[str, Path] = {}
         self._listing = LibraryListing((), ())
+        # (case id, patient id) pairs already logged, so a moved case is logged once, not on
+        # every read until its next write.
+        self._reparented: set[tuple[str, str]] = set()
 
     @property
     def root(self) -> Path:
@@ -251,7 +254,7 @@ class Library:
                         problems.append(LibraryProblem(rel, _duplicate_message("case", other)))
                         continue
                     case_dirs[case.id] = cdir
-                    cases.append(case)
+                    cases.append(self._in_folder(case, patient.id))
                 cases.sort(key=lambda c: c.created_at, reverse=True)
                 patients.append(PatientEntry(patient, pdir, tuple(cases)))
             patients.sort(key=lambda e: (_key(e.record.name), e.folder.name))
@@ -286,6 +289,21 @@ class Library:
                 if folder is not None and self._fresh(folder / PATIENT_FILE):
                     return folder
         raise PatientNotFoundError("This patient no longer exists.")
+
+    def _owner(self, case_dir: Path) -> str | None:
+        """The id of the patient whose folder holds `case_dir`. Call it holding the I/O lock."""
+        parsed = self._parse(case_dir.parent / PATIENT_FILE, parse_patient, self._files)
+        return parsed.record.id if parsed is not None and parsed.record is not None else None
+
+    def _in_folder(self, case: CaseRecord, owner: str | None) -> CaseRecord:
+        # The folder is authoritative: a case moved into another patient's folder in Finder
+        # belongs to that patient. Readers see it so at once; the next write saves it.
+        if owner is None or owner == case.patient_id:
+            return case
+        if (case.id, owner) not in self._reparented:
+            self._reparented.add((case.id, owner))
+            log.info("case_reparented", case_id=case.id)
+        return case.model_copy(update={"patient_id": owner})
 
     def _remember(self, path: Path, record: PatientRecord | CaseRecord) -> None:
         # Our own write changes the signature; recording it avoids a rescan on the next lookup.
@@ -496,13 +514,30 @@ class Library:
 
     def read_case(self, case_id: str) -> CaseRecord:
         with self._io:
-            path = self._case_dir(case_id) / CASE_FILE
-            try:
-                return parse_case(path.read_bytes())
-            except FileNotFoundError as exc:
-                raise CaseNotFoundError("This case no longer exists.") from exc
-            except OSError as exc:
-                raise StorageError(f"The case could not be read: {_reason(exc)}") from exc
+            folder = self._case_dir(case_id)
+            return self._in_folder(self._stored_case(folder), self._owner(folder))
+
+    def _stored_case(self, folder: Path) -> CaseRecord:
+        """case.json as it is on disk. Call it holding the I/O lock."""
+        try:
+            return parse_case((folder / CASE_FILE).read_bytes())
+        except FileNotFoundError as exc:
+            raise CaseNotFoundError("This case no longer exists.") from exc
+        except OSError as exc:
+            raise StorageError(f"The case could not be read: {_reason(exc)}") from exc
+
+    def sync_case_patient(self, case_id: str) -> CaseRecord:
+        """The case, after saving its folder's patient id into case.json if Finder moved it.
+
+        For callers that copy case.json as it is on disk, such as the archive writer.
+        """
+        with self._locks.hold(case_id):
+            with self._io:
+                folder = self._case_dir(case_id)
+                stored = self._stored_case(folder)
+                if self._in_folder(stored, self._owner(folder)) is stored:
+                    return stored
+            return self.update_case(case_id, lambda case: case)
 
     def update_case(self, case_id: str, change: Callable[[CaseRecord], CaseRecord]) -> CaseRecord:
         with self._locks.hold(case_id):

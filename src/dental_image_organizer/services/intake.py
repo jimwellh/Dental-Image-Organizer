@@ -147,7 +147,8 @@ def add_photos(
     """Store the uploads as `pending` photos of the case; return the ids to process and the skips.
 
     A photo that failed earlier and is dropped again is retried under its own record, so the
-    case still holds one record per content.
+    case still holds one record per content. So is a pending one while no job of the case runs:
+    quitting or a crash left it without the job that would have processed it.
     """
     with bound_contextvars(case_id=case_id):
         library = ctx.library()
@@ -166,6 +167,9 @@ def add_photos(
             seen: set[str] = set()
             now = local_now()
             photos = list(case.photos)
+            # A queued or running job of the case will process its pending photos. A drop that
+            # lands between another upload's record and its job only processes a photo twice.
+            idle = not ctx.jobs.active(case_id)
             for outcome in outcomes:
                 if isinstance(outcome, Skipped):
                     skipped.append(outcome)
@@ -173,7 +177,10 @@ def add_photos(
                 known = recorded.get(outcome.sha256)
                 # A failed photo is retried rather than reported: its message tells the user to
                 # drop it again, and staging has just put its file back.
-                if outcome.sha256 in seen or (known is not None and known.state != "failed"):
+                retried = known is not None and (
+                    known.state == "failed" or (known.state == "pending" and idle)
+                )
+                if outcome.sha256 in seen or (known is not None and not retried):
                     skipped.append(Skipped(outcome.name, "duplicate", DUPLICATE_MESSAGE))
                     continue
                 seen.add(outcome.sha256)
@@ -181,9 +188,12 @@ def add_photos(
                     photo = pending_photo(outcome, role, now, directory)
                     photos.append(photo)
                 else:
-                    retry = known.model_copy(
-                        update={"state": "pending", "error": None, "edit": None}
-                    )
+                    # A pending record is already as a retry leaves it, manual edit included.
+                    retry = known
+                    if known.state == "failed":
+                        retry = known.model_copy(
+                            update={"state": "pending", "error": None, "edit": None}
+                        )
                     photo = _file_checked(retry, directory)
                     photos = [photo if p.id == photo.id else p for p in photos]
                 added.append(photo.id)
