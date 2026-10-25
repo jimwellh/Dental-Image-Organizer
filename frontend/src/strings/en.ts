@@ -75,7 +75,13 @@ export const en = {
       one: "The classifier learned from 1 photo.",
       other: "The classifier learned from {n} photos.",
     },
-    notLearned: "The classifier did not learn from this export.",
+    // `trained: false` still means the samples were stored; only no classifier exists yet.
+    savedForClassifier: (n: number) =>
+      `Saved ${String(n)} ${n === 1 ? "photo" : "photos"} for the classifier; it will suggest slots once it has enough.`,
+    learningNoModel:
+      "The classifier could not learn from this composite: the AI model is not downloaded.",
+    learningFailed: "The classifier could not learn from this composite: {message}",
+    learningUnknown: "The classifier could not learn from this composite.",
     caseFiles: { one: "{title}: 1 file", other: "{title}: {n} files" },
     caseFailed: "{title}: {message}",
     unknownCase: "A case",

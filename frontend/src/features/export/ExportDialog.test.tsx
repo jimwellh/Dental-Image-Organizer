@@ -178,6 +178,41 @@ describe("ExportDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it.each([
+    [
+      "the model is not downloaded",
+      { error: "no_model", message: null },
+      en.export.learningNoModel,
+    ],
+    [
+      "learning failed with a message",
+      { error: "failed", message: "Out of memory." },
+      en.export.learningFailed.replace("{message}", "Out of memory."),
+    ],
+    [
+      "learning failed without a message",
+      { error: "failed", message: null },
+      en.export.learningUnknown,
+    ],
+    [
+      "the samples are stored but no classifier exists yet",
+      { samples: 9, trained: false },
+      en.export.savedForClassifier(9),
+    ],
+  ])("explains the learning line when %s", async (_name, learning, line) => {
+    caseServer();
+    const user = userEvent.setup();
+    renderWithClient(
+      <ExportDialog target={{ ...caseTarget, caseType: "composite" }} onClose={() => undefined} />,
+    );
+    await start(user);
+
+    FakeEventSource.last?.emit("done", { result: caseResult({ learning }) });
+
+    expect(await screen.findByText(line)).toBeInTheDocument();
+    expect(screen.queryByText(/no_model/)).toBeNull();
+  });
+
   it("shows the message of a failed job", async () => {
     caseServer();
     const user = userEvent.setup();

@@ -250,6 +250,20 @@ function Result({ job, target }: { job: JobView; target: ExportTarget }) {
   );
 }
 
+// Never the raw error code: the user cannot act on `no_model`.
+function learningLine(learning: NonNullable<ExportResult["learning"]>): string {
+  if (!("error" in learning)) {
+    return learning.trained
+      ? phrase(en.export.learned, learning.samples)
+      : en.export.savedForClassifier(learning.samples);
+  }
+  if (learning.error === "no_model") return en.export.learningNoModel;
+  if (learning.error === "failed" && learning.message) {
+    return en.export.learningFailed.replace("{message}", learning.message);
+  }
+  return en.export.learningUnknown;
+}
+
 function CaseResult({ result }: { result: ExportResult }) {
   const { learning, skipped } = result;
   return (
@@ -273,15 +287,7 @@ function CaseResult({ result }: { result: ExportResult }) {
       ))}
       {skipped.pending > 0 && <p>{phrase(en.export.skippedPending, skipped.pending)}</p>}
       {skipped.failed > 0 && <p>{phrase(en.export.skippedFailed, skipped.failed)}</p>}
-      {learning !== null && (
-        <p>
-          {"error" in learning
-            ? (learning.message ?? learning.error)
-            : learning.trained
-              ? phrase(en.export.learned, learning.samples)
-              : en.export.notLearned}
-        </p>
-      )}
+      {learning !== null && <p>{learningLine(learning)}</p>}
     </div>
   );
 }
