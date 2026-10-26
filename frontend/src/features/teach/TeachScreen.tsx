@@ -25,7 +25,7 @@ import { ShootingOrderPicker } from "../../components/ShootingOrderPicker";
 import { SlotBoard } from "../../components/SlotBoard";
 import { partitionFiles, type UnreadableEntry } from "../../lib/dropFiles";
 import { skipSummary } from "../../lib/skipped";
-import { FLIPS, SLOTS, moveInMap, type SlotMapDraft } from "../../lib/slots";
+import { FLIPS, SLOTS, isFlip, moveInMap, type SlotMapDraft } from "../../lib/slots";
 import { fill } from "../../lib/text";
 import { en } from "../../strings/en";
 import { ModelConsent } from "../ai/ModelConsent";
@@ -34,8 +34,6 @@ import { useNotify } from "../shell/notify";
 import { teachProgress } from "./progress";
 
 const frame = "aspect-[4/3] w-full rounded bg-slate-200 object-cover";
-
-const isFlip = (value: string): value is Flip => FLIPS.some((flip) => flip === value);
 
 interface Open {
   sessionId: string;

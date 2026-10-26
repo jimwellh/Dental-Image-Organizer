@@ -25,6 +25,9 @@ export const FLIPS = [
   "rotate_180",
 ] as const satisfies readonly Flip[];
 
+/** Narrows the string a `<select>` reports to a flip the server knows. */
+export const isFlip = (value: string): value is Flip => FLIPS.some((flip) => flip === value);
+
 /** Where each photo id sits; an id missing from the values is in the tray. */
 export type SlotMapDraft = Partial<Record<Slot, string>>;
 
