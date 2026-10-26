@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+@layer base {
+  /* One visible focus ring for every control (spec §5.3). */
+  :focus-visible {
+    outline: 3px solid var(--color-sky-600);
+    outline-offset: 2px;
+  }
+}

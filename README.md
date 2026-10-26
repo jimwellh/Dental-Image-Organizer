@@ -3,9 +3,10 @@
 Automated alignment, color matching, and collage generation for clinical intraoral photos.
 It runs locally on the dentist's Mac.
 
-> **Status: early development.** The procedure and composite pipelines are available as
-> command-line tools (`dio process`, `dio composite`), and the local server API as `dio serve`;
-> the app UI is not built yet. See the
+> **Status: early development.** The app UI is built: `dio serve` serves the Library, the
+> procedure and composite case screens, and Settings in your browser (the pipelines are also
+> available as the command-line tools `dio process` and `dio composite`). Distribution (the
+> install script, the launcher, and in-app update) comes next. See the
 > [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
 
 ## What it does
@@ -121,6 +122,25 @@ In Windows PowerShell:
 ```powershell
 $env:DIO_APP_DIR = "$env:TEMP\dio"; uv run dio serve --no-browser
 ```
+
+The frontend needs Node 24.11 or later. Install its packages once, then run the Vite dev
+server, which proxies `/api` to the running `dio serve`:
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run dev   # open http://localhost:5173, not 127.0.0.1
+```
+
+Open `http://localhost:5173` and not `http://127.0.0.1:5173`: the dev server listens on `::1`
+only, so the `127.0.0.1` address refuses connections.
+
+`npm --prefix frontend run build` puts the UI into the package (`src/dental_image_organizer/web/`,
+gitignored), so `dio serve` serves it at `http://127.0.0.1:8765`.
+
+After an API change, regenerate the typed client with `npm --prefix frontend run gen:api`. After
+a change to `core.transform`, regenerate the shared test fixture with
+`uv run python tests/support/transform_fixture.py`. `npm --prefix frontend run check` runs ESLint,
+`tsc`, Prettier, and the frontend tests.
 
 Process one procedure case from the command line:
 

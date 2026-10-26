@@ -27,3 +27,37 @@ jobs:
       - run: uv run mypy
       - run: uv run lint-imports
       - run: uv run pytest
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: uv sync --locked
+        working-directory: .
+      - name: Generated API types are current
+        run: |
+          npm run gen:api
+          git diff --exit-code -- src/api/openapi.json src/api/schema.d.ts
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+      - name: The wheel carries the built UI
+        working-directory: .
+        run: |
+          uv build --wheel
+          unzip -l dist/*.whl | grep -q "dental_image_organizer/web/index.html"
