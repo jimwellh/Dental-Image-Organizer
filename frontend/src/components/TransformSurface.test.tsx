@@ -207,11 +207,27 @@ describe("TransformSurface", () => {
   it("leaves browser shortcuts alone", () => {
     const { surface, onChange } = setup();
 
-    const handled = fireEvent.keyDown(surface, { key: "+", metaKey: true });
+    const meta = fireEvent.keyDown(surface, { key: "=", metaKey: true });
+    const ctrl = fireEvent.keyDown(surface, { key: "+", ctrlKey: true });
     fireEvent.keyDown(surface, { key: "a" });
 
-    expect(handled).toBe(true);
+    expect(meta).toBe(true);
+    expect(ctrl).toBe(true);
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("rotates with brackets typed through Option or AltGr", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { surface, last } = setup();
+
+    // Option on German, French, and Swiss Mac layouts.
+    fireEvent.keyDown(surface, { key: "]", altKey: true });
+    const first = rotateAbout(START, ROTATE_STEP_DEG, CENTER);
+    expectClose(last(), first);
+
+    // AltGr on Windows arrives as Ctrl and Alt together.
+    fireEvent.keyDown(surface, { key: "]", ctrlKey: true, altKey: true });
+    expectClose(last(), rotateAbout(first, ROTATE_STEP_DEG, CENTER));
   });
 
   it("commits a pending change when it is removed", () => {

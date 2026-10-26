@@ -191,8 +191,10 @@ export function TransformSurface(props: TransformSurfaceProps) {
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // Cmd/Ctrl plus and minus zoom the page; they are not ours.
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    // Cmd/Ctrl plus and minus zoom the page; they are not ours. Alt is not a shortcut modifier
+    // here: German, French, and Swiss Mac layouts type [ and ] with Option, and Windows reports
+    // AltGr as Ctrl+Alt, so skipping on Alt would leave rotation unreachable by keyboard.
+    if (event.metaKey || (event.ctrlKey && !event.altKey)) return;
     const apply = KEY_STEPS[event.key];
     if (!apply) return;
     event.preventDefault();
