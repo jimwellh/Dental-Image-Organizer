@@ -1,10 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { CaseView, PhotoRecord } from "../../api/types";
 import { fill } from "../../lib/text";
 import { en } from "../../strings/en";
-import { fakeFile } from "../../test/fakeDrop";
+import { fakeFile, fakeTransfer, fileEntry } from "../../test/fakeDrop";
 import { fakeServer, type FakeServer } from "../../test/fakeServer";
 import { editRecord, id, photoRecord, procedureView } from "../../test/records";
 import { renderWithClient } from "../../test/render";
@@ -158,6 +158,25 @@ describe("ProcedureScreen", () => {
     expect(server.calls.filter((call) => call.method === "PUT").map((c) => c.path)).toEqual([
       `/api/cases/${view.case.id}/reference`,
     ]);
+  });
+
+  it("sends the first photo of a drop whose first file is filtered out", async () => {
+    const view = procedureView([]);
+    const server = serveView(view);
+    renderWithClient(<ProcedureScreen view={view} />);
+
+    const entries = ["IMG_0001.AAE", "IMG_0001.HEIC", "IMG_0002.HEIC"].map((name) =>
+      fileEntry(fakeFile(name)),
+    );
+    fireEvent.drop(screen.getByRole("region", { name: en.procedure.reference.drop }), {
+      dataTransfer: fakeTransfer(entries),
+    });
+
+    await sent(server, "PUT");
+    const put = server.calls.find((call) => call.method === "PUT");
+    const sentFile = (put?.body as FormData).get("file") as File;
+    expect(sentFile.name).toBe("IMG_0001.HEIC");
+    expect(await screen.findByText("Skipped 1 file: 1 edit sidecar")).toBeInTheDocument();
   });
 
   it("suggests a larger output when the photos carry more detail", async () => {

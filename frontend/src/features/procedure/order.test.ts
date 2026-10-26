@@ -45,11 +45,12 @@ describe("captureOrder", () => {
   });
 
   it("does not let the offset change the order", () => {
-    const withOffset = photoRecord({ id: id(2), captured_at: "2026-10-16T10:00:00+08:00" });
+    // By instant this is 04:00Z, before the other; by wall clock it is 12:00, after it.
+    const withOffset = photoRecord({ id: id(2), captured_at: "2026-10-16T12:00:00+08:00" });
     const plain = photoRecord({ id: id(1), captured_at: "2026-10-16T11:00:00" });
-    expect([plain, withOffset].sort(captureOrder).map((p) => p.id)).toEqual([
-      withOffset.id,
+    expect([withOffset, plain].sort(captureOrder).map((p) => p.id)).toEqual([
       plain.id,
+      withOffset.id,
     ]);
   });
 

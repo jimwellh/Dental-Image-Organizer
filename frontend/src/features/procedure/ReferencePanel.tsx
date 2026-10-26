@@ -128,7 +128,9 @@ export function ReferencePanel({ view }: { view: CaseView }) {
       {showDrop && (
         <DropZone
           label={en.procedure.reference.drop}
-          multiple={false}
+          // Not `multiple={false}`: that keeps the first dropped file before the filter, so a folder
+          // starting with an `.AAE` or `.MOV` would set no reference. `send` picks the first photo.
+          multiple
           busy={upload.isPending ? en.procedure.reference.uploading : null}
           onFiles={send}
         />
