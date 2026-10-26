@@ -3,7 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { en } from "../../strings/en";
 import { errorReply, fakeServer } from "../../test/fakeServer";
-import { id, photoRecord, procedureView } from "../../test/records";
+import {
+  classifierView,
+  compositeView,
+  id,
+  memberRecord,
+  modelStatusView,
+  photoRecord,
+  procedureView,
+} from "../../test/records";
 import { renderWithClient } from "../../test/render";
 import { CaseScreen } from "./CaseScreen";
 
@@ -39,6 +47,19 @@ describe("CaseScreen", () => {
     server.on("GET /api/cases/:case_id", () => procedureView([photoRecord()]));
     await user.click(screen.getByRole("button", { name: en.case.retry }));
     expect(await screen.findByRole("heading", { name: "Case" })).toBeInTheDocument();
+  });
+
+  it("a composite case opens the composite board", async () => {
+    fakeServer({
+      "GET /api/cases/:case_id": () =>
+        compositeView([memberRecord({ id: id(1), slot: "upper_left" })]),
+      "GET /api/model/status": () => modelStatusView({ available: true }),
+      "GET /api/classifier/status": () => classifierView({ trained: true }),
+    });
+    renderWithClient(<CaseScreen caseId={caseId} />);
+
+    expect(await screen.findByRole("group", { name: en.slots.upper_left })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: en.composite.preview })).toBeInTheDocument();
   });
 
   it("deleting asks first and returns to the library", async () => {

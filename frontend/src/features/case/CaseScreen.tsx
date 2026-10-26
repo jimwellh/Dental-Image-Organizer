@@ -4,6 +4,7 @@ import { Button } from "../../components/Button";
 import { Link } from "../../lib/router";
 import { fill } from "../../lib/text";
 import { en } from "../../strings/en";
+import { CompositeScreen } from "../composite/CompositeScreen";
 import { ProcedureScreen } from "../procedure/ProcedureScreen";
 
 const LIBRARY = { name: "library" } as const;
@@ -12,14 +13,7 @@ export function CaseScreen({ caseId }: { caseId: string }) {
   const query = useCase(caseId);
 
   if (query.data !== undefined) {
-    // Until Task 13 a composite case only shows its title.
-    if (query.data.case.type === "composite") {
-      return (
-        <h1 className="text-xl font-semibold">
-          {fill(en.case.compositeTitle, { title: query.data.case.title })}
-        </h1>
-      );
-    }
+    if (query.data.case.type === "composite") return <CompositeScreen view={query.data} />;
     return <ProcedureScreen view={query.data} />;
   }
 
