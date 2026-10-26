@@ -3,10 +3,8 @@
 Automated alignment, color matching, and collage generation for clinical intraoral photos.
 It runs locally on the dentist's Mac.
 
-> **Status: early development.** The app UI is built: `dio serve` serves the Library, the
-> procedure and composite case screens, and Settings in your browser (the pipelines are also
-> available as the command-line tools `dio process` and `dio composite`). Distribution (the
-> install script, the launcher, and in-app update) comes next. See the
+> **Status: early development, not released yet.** The app, its install script, the Dock
+> launcher, and in-app updates are built; the first release to PyPI is next. See the
 > [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
 
 ## What it does
@@ -45,19 +43,26 @@ The only network access is:
 - an optional update check against PyPI;
 - updates that you start from the app.
 
-## Planned installation (macOS)
+## Installation (macOS)
 
-Requires an Apple Silicon Mac with macOS 14 Sonoma or later.
-
-The app is not released yet. Once it is, installation will be one command in Terminal:
+Requires an Apple Silicon Mac with macOS 14 Sonoma or later. Once the app is released,
+installation is one command in Terminal:
 
 ```sh
 curl -LsSf https://raw.githubusercontent.com/jimwellh/Dental-Image-Organizer/main/scripts/install.sh | sh
 ```
 
-This installs the app with [uv](https://docs.astral.sh/uv/) and adds a
-**Dental Image Organizer** launcher to `~/Applications`. No Python installation is required, and
-the launcher costs nothing.
+This installs the app with [uv](https://docs.astral.sh/uv/) (installing uv first if needed) and
+adds a **Dental Image Organizer** app to `~/Applications`, then opens it. No Python installation
+is required. To keep it in the Dock, right-click its Dock icon while it is open, then choose
+Options > Keep in Dock. You can also open it with Spotlight.
+
+**Update.** When a new version is out, the app shows a banner with **Update now**. The app checks
+PyPI for the newest version number once a day; turn this off in Settings. You can also update in
+Terminal with `uv tool upgrade dental-image-organizer`, or run the install command again.
+
+**Uninstall.** Run `dio uninstall-launcher && uv tool uninstall dental-image-organizer`. Your
+library (`~/DentalImageOrganizer`) is kept.
 
 ## Third-party model
 
@@ -167,6 +172,27 @@ settings; importing refuses while the app is running):
 uv run dio export-case "~/DentalImageOrganizer/Alex Wang/20261016 implant 16" case.zip
 uv run dio import-case case.zip [--on-conflict skip|copy]
 ```
+
+### Distribution
+
+`scripts/install.sh` is the end-user installer; `dio install-launcher` makes the macOS app with
+`osacompile`. Neither runs on Windows, so the tests run `install.sh` under `sh` (Git's `sh` on
+Windows) with the macOS commands faked, and CI's **macOS smoke** job installs a freshly built
+wheel on a real Mac:
+
+```sh
+npm --prefix frontend run build && uv build --wheel
+sh scripts/smoke_macos.sh dist/dental_image_organizer-<version>-py3-none-any.whl   # macOS only
+```
+
+The smoke test keeps everything in a temporary folder (`DIO_APP_DIR` and its own Applications
+folder), so it touches neither your library nor `~/Applications`.
+
+**Releasing.** Pushing a tag `v<version>` that matches `version` in `pyproject.toml` runs
+`.github/workflows/release.yml`: it builds the UI and the package, runs the macOS smoke test,
+publishes to PyPI with Trusted Publishing, and creates the GitHub Release. Before the first
+release, add the Trusted Publisher on PyPI (workflow `release.yml`, environment `pypi`) and
+create the `pypi` environment in the repository settings.
 
 ### Golden photos (local only)
 
