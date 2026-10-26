@@ -92,6 +92,23 @@ describe("ProcedureScreen", () => {
     expect(card.queryByRole("button")).toBeNull();
   });
 
+  it("Compare opens the compare view of that photo, and Close returns", async () => {
+    const photo = photoRecord({ id: id(2) });
+    const view = procedureView([reference, photo]);
+    serveView(view);
+    const user = userEvent.setup();
+    renderWithClient(<ProcedureScreen view={view} />);
+
+    await user.click(
+      within(tile(photo) as HTMLElement).getByRole("button", { name: en.procedure.tile.compare }),
+    );
+    const dialog = screen.getByRole("dialog", { name: en.compare.title });
+    expect(within(dialog).getByAltText(photo.source_name)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: en.compare.close }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("deleting a photo asks first", async () => {
     const photo = photoRecord({ id: id(2) });
     const view = procedureView([reference, photo]);

@@ -6,12 +6,14 @@ import { CaseHeader } from "../case/CaseHeader";
 import { ExportDialog } from "../export/ExportDialog";
 import { DropZone } from "../intake/DropZone";
 import { useCaseUpload } from "../intake/useCaseUpload";
+import { CompareView } from "./CompareView";
 import { ReferencePanel } from "./ReferencePanel";
 import { Timeline } from "./Timeline";
 
 export function ProcedureScreen({ view }: { view: CaseView }) {
   const caseId = view.case.id;
   const [exporting, setExporting] = useState(false);
+  const [comparing, setComparing] = useState<string | null>(null);
   const { upload, progress } = useCaseUpload(caseId);
 
   return (
@@ -39,9 +41,17 @@ export function ProcedureScreen({ view }: { view: CaseView }) {
       />
       <section aria-label={en.procedure.timeline.title} className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold text-slate-900">{en.procedure.timeline.title}</h2>
-        {/* Task 11 opens the compare view from here. */}
-        <Timeline view={view} onCompare={() => undefined} />
+        <Timeline view={view} onCompare={setComparing} />
       </section>
+      {comparing !== null && (
+        <CompareView
+          view={view}
+          photoId={comparing}
+          onClose={() => {
+            setComparing(null);
+          }}
+        />
+      )}
       {exporting && (
         <ExportDialog
           target={{
