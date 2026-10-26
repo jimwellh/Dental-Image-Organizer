@@ -148,8 +148,10 @@ export function SequenceBuilder({ view }: { view: CaseView }) {
   const changed =
     selection.length !== baseline.length || selection.some((photoId, n) => photoId !== baseline[n]);
   const inRange = selection.length >= SEQUENCE_MIN && selection.length <= SEQUENCE_MAX;
+  // The default "all usable photos" is not the dentist's choice, so it is not scolded (11 photos
+  // would otherwise open with an error). The bound speaks once they edit; Save stays disabled.
+  const showRange = !inRange && picked !== null;
   const reasonId = useId();
-
   const move = (from: number, to: number) => {
     setPicked(arrayMove(selection, from, to));
   };
@@ -226,7 +228,7 @@ export function SequenceBuilder({ view }: { view: CaseView }) {
               )}
             </div>
           </div>
-          {!inRange && (
+          {showRange && (
             <p id={reasonId} role="status" className="text-sm text-red-700">
               {fill(en.sequence.outOfRange, {
                 min: String(SEQUENCE_MIN),
@@ -238,7 +240,7 @@ export function SequenceBuilder({ view }: { view: CaseView }) {
           <div className="flex flex-wrap gap-2">
             <Button
               variant="primary"
-              aria-describedby={inRange ? undefined : reasonId}
+              aria-describedby={showRange ? reasonId : undefined}
               disabled={!inRange || !changed || change.isPending}
               onClick={() => {
                 send(selection);

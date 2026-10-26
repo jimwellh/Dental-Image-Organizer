@@ -6,6 +6,7 @@ import { queryKeys } from "../../api/queries";
 import type { ImportPolicy } from "../../api/types";
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
+import { fill } from "../../lib/text";
 import { en } from "../../strings/en";
 import { useNotify } from "../shell/notify";
 
@@ -40,7 +41,7 @@ export function ImportArchiveButton() {
       setConflict(null);
       const line =
         result.status === "skipped" ? en.library.import.skipped : en.library.import.imported;
-      notify({ kind: "info", lines: [line.replace("{title}", result.title)] });
+      notify({ kind: "info", lines: [fill(line, { title: result.title })] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.patients });
     },
     onError: (error, { file, policy }) => {
@@ -103,7 +104,7 @@ export function ImportArchiveButton() {
           }}
         >
           <p className="mb-5 text-sm text-slate-700">
-            {en.library.import.conflictBody.replace("{title}", conflict.title)}
+            {fill(en.library.import.conflictBody, { title: conflict.title })}
           </p>
           <div className="flex justify-end gap-2">
             <Button

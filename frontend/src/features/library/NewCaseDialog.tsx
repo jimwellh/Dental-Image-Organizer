@@ -6,7 +6,7 @@ import type { CaseCreate, CaseType, PatientView } from "../../api/types";
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
 import { navigate } from "../../lib/router";
-import { foldForSearch } from "../../lib/text";
+import { fill, foldForSearch } from "../../lib/text";
 import { en } from "../../strings/en";
 
 const MAX_SUGGESTIONS = 8;
@@ -93,7 +93,7 @@ export function NewCaseDialog(props: {
       <Dialog title={dialogTitle} onClose={onClose}>
         <div className="flex flex-col gap-4">
           <p ref={clashHeading} tabIndex={-1} className="text-sm text-slate-900">
-            {en.library.newCase.sameName.replace("{name}", typedName)}
+            {fill(en.library.newCase.sameName, { name: typedName })}
           </p>
           <ul className="flex flex-col gap-2">
             {clash.map((patient) => (

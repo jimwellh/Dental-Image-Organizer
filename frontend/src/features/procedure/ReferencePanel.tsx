@@ -82,13 +82,17 @@ export function ReferencePanel({ view }: { view: CaseView }) {
 
   const upload = useMutation({
     mutationFn: (file: File) => setReference(caseId, file),
-    onSuccess: () =>
+    onSuccess: (result) => {
+      // A non-photo answers 200 with nothing added; without this line the drop would seem to vanish.
+      const lines = skipSummary(result.skipped);
+      if (lines.length > 0) notify({ kind: "error", lines });
       // The answer is the upload result, not the case: the reference is pending until refetched,
       // and `useCase` polls from then on.
-      Promise.all([
+      return Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.case(caseId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.patients }),
-      ]),
+      ]);
+    },
     onSettled: () => {
       uploading.current = false;
     },
@@ -97,6 +101,7 @@ export function ReferencePanel({ view }: { view: CaseView }) {
   const send = (files: File[]) => {
     const { upload: accepted, skipped } = partitionFiles(files);
     const lines = skipSummary(skipped);
+    if (accepted.length > 1) lines.push(en.procedure.reference.onlyFirstUsed);
     if (lines.length > 0) notify({ kind: "info", lines });
     const file = accepted[0];
     if (file === undefined || uploading.current) return;

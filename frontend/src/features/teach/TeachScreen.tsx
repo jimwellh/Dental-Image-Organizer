@@ -204,7 +204,8 @@ function Confirmation(props: {
       <div className="flex gap-2">
         <Button
           variant="primary"
-          disabled={busy || filled.length === 0}
+          // Until the flip defaults load, a slot would be taught as "none" by mistake.
+          disabled={busy || filled.length === 0 || classifier === undefined}
           onClick={() => {
             if (sending.current) return;
             sending.current = true;
@@ -265,17 +266,6 @@ function SessionPanel(props: {
     );
   }
 
-  if (session.isError) {
-    return (
-      <div className="flex flex-col gap-3">
-        <p role="alert" className="text-sm text-red-900">
-          {fill(en.teach.sessionLost, { message: describeError(session.error) })}
-        </p>
-        {cancelButton}
-      </div>
-    );
-  }
-
   if (session.data !== undefined) {
     return (
       <Confirmation
@@ -292,6 +282,18 @@ function SessionPanel(props: {
           onClose();
         }}
       />
+    );
+  }
+
+  // After the data check: a failed refetch must not drop a board the dentist is arranging.
+  if (session.isError) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p role="alert" className="text-sm text-red-900">
+          {fill(en.teach.sessionLost, { message: describeError(session.error) })}
+        </p>
+        {cancelButton}
+      </div>
     );
   }
 

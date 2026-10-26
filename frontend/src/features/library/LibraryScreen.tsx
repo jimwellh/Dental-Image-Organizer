@@ -3,7 +3,7 @@ import { describeError } from "../../api/http";
 import { usePatients } from "../../api/queries";
 import type { CaseType, PatientView } from "../../api/types";
 import { Button } from "../../components/Button";
-import { matchesPatient } from "../../lib/text";
+import { fill, matchesPatient } from "../../lib/text";
 import { en } from "../../strings/en";
 import { ExportDialog } from "../export/ExportDialog";
 import { CaseCard } from "./CaseCard";
@@ -69,7 +69,7 @@ export function LibraryScreen() {
 
       {patients.isError && (
         <div role="alert" className="flex items-center gap-3 text-sm text-red-900">
-          <p>{en.library.loadFailed.replace("{message}", describeError(patients.error))}</p>
+          <p>{fill(en.library.loadFailed, { message: describeError(patients.error) })}</p>
           <Button
             onClick={() => {
               void patients.refetch();

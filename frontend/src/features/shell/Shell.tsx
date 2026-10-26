@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { shutdown } from "../../api/endpoints";
+import { en } from "../../strings/en";
 import { ApiError, describeError } from "../../api/http";
 import { ClosedNotice } from "./ClosedNotice";
 import { useServerConnection } from "./connection";
@@ -9,6 +10,28 @@ import { useNotify } from "./notify";
 export function Shell({ children }: { children: ReactNode }) {
   const { state, markClosed } = useServerConnection();
   const notify = useNotify();
+
+  // A drop outside every zone would make the browser open the file in this tab and lose the app.
+  // Zones stop the event first, so only strays reach the window.
+  useEffect(() => {
+    const carriesFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
+    const onDragOver = (event: DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+    };
+    const onDrop = (event: DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      notify({ kind: "info", lines: [en.intake.dropOnZone] });
+    };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [notify]);
 
   if (state === "closed") return <ClosedNotice />;
 

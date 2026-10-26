@@ -27,6 +27,7 @@ export function ProcedureScreen({ view }: { view: CaseView }) {
       />
       <ReferencePanel view={view} />
       <DropZone
+        queues
         label={en.procedure.upload.label}
         busy={
           progress === null

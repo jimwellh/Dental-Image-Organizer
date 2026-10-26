@@ -9,8 +9,12 @@ interface DropZoneProps {
   help?: string;
   multiple?: boolean;
   disabled?: boolean;
-  /** Text shown instead of the prompt while work is under way; the zone ignores input then. */
+  /**
+   * Text shown instead of the prompt while work is under way. The zone takes no new input then,
+   * unless `queues` says its owner lines further drops up behind the running one.
+   */
   busy?: string | null;
+  queues?: boolean;
   /** `unreadable` lists dropped entries the browser could not read; the rest still arrive. */
   onFiles: (files: File[], unreadable: readonly UnreadableEntry[]) => void;
 }
@@ -21,12 +25,15 @@ export function DropZone({
   multiple = true,
   disabled = false,
   busy = null,
+  queues = false,
   onFiles,
 }: DropZoneProps) {
   const notify = useNotify();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const inactive = disabled || busy !== null;
+  // A disabled or busy zone still claims the drag: unclaimed, the browser would open the dropped
+  // file in this tab and abandon the app and its uploads.
+  const inactive = disabled || (busy !== null && !queues);
 
   const deliver = (files: File[], unreadable: readonly UnreadableEntry[] = []) => {
     const chosen = multiple ? files : files.slice(0, 1);
@@ -36,9 +43,14 @@ export function DropZone({
   };
 
   const onDragOver = (event: DragEvent<HTMLElement>) => {
-    if (inactive) return;
     // Without this the browser opens the file instead of dropping it here.
     event.preventDefault();
+    // The zone has handled the event; the window-level guard in `Shell` is for strays only.
+    event.stopPropagation();
+    if (inactive) {
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
     setDragging(true);
   };
 
@@ -50,6 +62,7 @@ export function DropZone({
 
   const onDrop = (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
+    event.stopPropagation();
     setDragging(false);
     if (inactive) return;
     // `filesFromDrop` reads the transfer synchronously before it awaits anything.

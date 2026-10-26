@@ -65,6 +65,9 @@ export function useTeachSession(sessionId: string | null) {
     queryKey: queryKeys.teach(sessionId ?? ""),
     queryFn: () => getTeachSession(sessionId ?? ""),
     enabled: sessionId !== null,
+    // A ready session never changes, so a refetch can only lose the board on a failure.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -73,10 +76,12 @@ export function useCaseChange<A>(caseId: string, change: (args: A) => Promise<Ca
   const client = useQueryClient();
   return useMutation({
     mutationFn: change,
+    // An in-flight poll that resolves after the change would overwrite the view written below.
+    onMutate: () => client.cancelQueries({ queryKey: queryKeys.case(caseId) }),
     onSuccess: (view) => {
       client.setQueryData(queryKeys.case(caseId), view);
-      // The patient list shows each case's counts and thumbnails.
-      return client.invalidateQueries({ queryKey: queryKeys.patients });
+      // The patient list shows each case's counts and thumbnails; the change need not wait for it.
+      void client.invalidateQueries({ queryKey: queryKeys.patients });
     },
   });
 }

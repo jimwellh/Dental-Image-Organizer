@@ -281,4 +281,51 @@ describe("ExportDialog", () => {
     const reveal = server.calls.find((call) => call.path === "/api/system/reveal");
     expect(reveal?.body).toEqual({ path: "Alex Wang" });
   });
+
+  it("shows a case title as typed, even when it holds a replacement pattern", async () => {
+    fakeServer({ "POST /api/patients/:patient_id/export": () => ({ job_id: JOB_ID }) });
+    const user = userEvent.setup();
+    renderWithClient(
+      <ExportDialog
+        target={{ ...patientTarget, cases: [{ id: id(3), title: "Crown $&" }] }}
+        onClose={() => undefined}
+      />,
+    );
+    await start(user);
+
+    FakeEventSource.last?.emit("done", {
+      result: { patient_id: PATIENT_ID, cases: [caseResult({ case_id: id(3) })], failed_cases: [] },
+    });
+
+    expect(await screen.findByText("Crown $&: 1 file")).toBeInTheDocument();
+  });
+
+  it("never shows an empty reason for a failed export", async () => {
+    caseServer();
+    const user = userEvent.setup();
+    renderWithClient(<ExportDialog target={caseTarget} onClose={() => undefined} />);
+    await start(user);
+
+    FakeEventSource.last?.emit("failed", {});
+
+    expect(
+      await screen.findByText(en.export.jobFailed.replace("{message}", en.export.failedUnknown)),
+    ).toBeInTheDocument();
+  });
+
+  it("refreshes the classifier after a composite export, not after a procedure export", async () => {
+    caseServer();
+    const user = userEvent.setup();
+    const { client } = renderWithClient(
+      <ExportDialog target={{ ...caseTarget, caseType: "composite" }} onClose={() => undefined} />,
+    );
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await start(user);
+
+    FakeEventSource.last?.emit("done", { result: caseResult() });
+
+    await waitFor(() => {
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.classifier });
+    });
+  });
 });

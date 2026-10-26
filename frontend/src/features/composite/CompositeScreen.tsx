@@ -184,6 +184,7 @@ export function CompositeScreen({ view }: { view: CaseView }) {
       />
       <AiStatusBanner />
       <DropZone
+        queues
         label={en.composite.upload.label}
         busy={
           progress === null

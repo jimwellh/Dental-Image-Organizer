@@ -82,7 +82,7 @@ interface NumberFieldProps {
   help?: string;
   value: number;
   bounds: Bounds;
-  step?: number;
+  step?: number | "any";
   onChange: (value: number) => void;
 }
 
@@ -382,7 +382,7 @@ export function SettingsScreen() {
           help={en.settings.cacheMaxGb.help}
           value={draft.cache_max_gb}
           bounds={CACHE_GB}
-          step={0.5}
+          step="any"
           onChange={(cache_max_gb) => {
             update({ cache_max_gb });
           }}

@@ -96,6 +96,33 @@ describe("useCaseChange", () => {
     expect(stored?.case.title).toBe("Renamed");
     expect(client.getQueryState(queryKeys.patients)?.isInvalidated).toBe(true);
   });
+
+  it("keeps the changed view when a poll that started earlier resolves later", async () => {
+    const caseId = id(100);
+    const { client, result } = renderQueryHook(() =>
+      useCaseChange(caseId, (title: string) =>
+        Promise.resolve(procedureView([], { case: { title } })),
+      ),
+    );
+    let finishPoll: (view: CaseView) => void = () => undefined;
+    const poll = client
+      .query({
+        queryKey: queryKeys.case(caseId),
+        queryFn: () =>
+          new Promise<CaseView>((resolve) => {
+            finishPoll = resolve;
+          }),
+      })
+      .catch(() => undefined);
+
+    await act(async () => {
+      await result.current.mutateAsync("Renamed");
+    });
+    finishPoll(procedureView([], { case: { title: "Stale" } }));
+    await poll;
+
+    expect(client.getQueryData<CaseView>(queryKeys.case(caseId))?.case.title).toBe("Renamed");
+  });
 });
 
 describe("createQueryClient", () => {

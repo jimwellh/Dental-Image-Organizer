@@ -200,6 +200,38 @@ describe("ProcedureScreen", () => {
     expect(await screen.findByText("Skipped 1 file: 1 edit sidecar")).toBeInTheDocument();
   });
 
+  it("says so when two photos are dropped but only the first is the reference", async () => {
+    const view = procedureView([]);
+    const server = serveView(view);
+    renderWithClient(<ProcedureScreen view={view} />);
+
+    const entries = ["A.HEIC", "B.HEIC"].map((name) => fileEntry(fakeFile(name)));
+    fireEvent.drop(screen.getByRole("region", { name: en.procedure.reference.drop }), {
+      dataTransfer: fakeTransfer(entries),
+    });
+
+    await sent(server, "PUT");
+    expect(await screen.findByText(en.procedure.reference.onlyFirstUsed)).toBeInTheDocument();
+  });
+
+  it("explains a reference the server skipped", async () => {
+    const view = procedureView([]);
+    fakeServer({
+      "PUT /api/cases/:case_id/reference": () => ({
+        job_id: null,
+        added: [],
+        skipped: [{ name: "IMG_0001.DNG", reason: "raw", message: "RAW is not supported." }],
+      }),
+    });
+    renderWithClient(<ProcedureScreen view={view} />);
+
+    fireEvent.drop(screen.getByRole("region", { name: en.procedure.reference.drop }), {
+      dataTransfer: fakeTransfer([fileEntry(fakeFile("IMG_0001.DNG", "image/x-adobe-dng"))]),
+    });
+
+    expect(await screen.findByText(en.skip.rawAdvice)).toBeInTheDocument();
+  });
+
   it("suggests a larger output when the photos carry more detail", async () => {
     const view = procedureView([reference], {
       suggested_output_scale: 1.5,

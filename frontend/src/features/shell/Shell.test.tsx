@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { createEvent, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { en } from "../../strings/en";
 import { errorReply, fakeServer } from "../../test/fakeServer";
@@ -46,4 +46,38 @@ test("a refused Quit shows the server's message and keeps the app open", async (
 
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not stop.");
   expect(screen.getByText("content")).toBeInTheDocument();
+});
+
+test("a file dropped outside any zone is ignored, not opened in the tab", async () => {
+  fakeServer(routes);
+  renderWithClient(
+    <Shell>
+      <p>content</p>
+    </Shell>,
+  );
+  const transfer = { types: ["Files"], dropEffect: "copy" };
+
+  const over = createEvent.dragOver(window, { dataTransfer: transfer });
+  fireEvent(window, over);
+  const drop = createEvent.drop(window, { dataTransfer: transfer });
+  fireEvent(window, drop);
+
+  expect(over.defaultPrevented).toBe(true);
+  expect(transfer.dropEffect).toBe("none");
+  expect(drop.defaultPrevented).toBe(true);
+  expect(await screen.findByText(en.intake.dropOnZone)).toBeInTheDocument();
+});
+
+test("a drag that carries no files is left alone", () => {
+  fakeServer(routes);
+  renderWithClient(
+    <Shell>
+      <p>content</p>
+    </Shell>,
+  );
+
+  const drop = createEvent.drop(window, { dataTransfer: { types: ["text/plain"] } });
+  fireEvent(window, drop);
+
+  expect(drop.defaultPrevented).toBe(false);
 });

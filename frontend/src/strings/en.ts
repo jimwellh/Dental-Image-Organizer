@@ -6,9 +6,7 @@ export const en = {
   },
   nav: {
     library: "Library",
-    case: "Case",
     settings: "Settings",
-    teach: "Teach",
     quit: "Quit",
   },
   shell: {
@@ -27,6 +25,7 @@ export const en = {
     photosHelp:
       "Dragging from Photos.app does not work? In Photos, choose File → Export, then drop the exported folder.",
     readFailed: "Could not read the dropped files; try again or use Choose files.",
+    dropOnZone: "Drop photos on a drop zone.",
     unreadable: "could not be read",
     uploading: "Uploading",
   },
@@ -86,6 +85,7 @@ export const en = {
     caseFailed: "{title}: {message}",
     unknownCase: "A case",
     jobFailed: "The export failed: {message}",
+    failedUnknown: "The server gave no reason.",
     badResult: "The export finished, but its result could not be read.",
     reveal: "Reveal in Finder",
     download: "Download zip",
@@ -180,6 +180,7 @@ export const en = {
       alt: "Reference photo",
       failed: "The reference could not be processed: {message}",
       uploading: "Uploading the reference…",
+      onlyFirstUsed: "Only the first photo was used as the reference.",
     },
     output: {
       legend: "Output resolution",
@@ -219,7 +220,6 @@ export const en = {
     orderHelp: "Drag a photo by its handle, or use Move up and Move down.",
     emptyOrder: "No photos chosen.",
     handle: "Drag to reorder",
-    position: "Position {n}",
     moveUp: "Move up",
     moveDown: "Move down",
     outOfRange: "A sequence holds {min} to {max} photos; {count} chosen.",

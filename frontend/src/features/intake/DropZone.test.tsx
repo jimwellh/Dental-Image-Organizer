@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { UploadResult } from "../../api/types";
@@ -113,5 +113,64 @@ describe("DropZone", () => {
       expect(screen.getByRole("alert")).toHaveTextContent(en.intake.readFailed);
     });
     expect(onFiles).not.toHaveBeenCalled();
+  });
+
+  it("claims a drop on a disabled zone without delivering it", () => {
+    const onFiles = vi.fn();
+    renderWithClient(<DropZone label="Photos" disabled onFiles={onFiles} />);
+    const transfer = { ...fakeTransfer([fileEntry(fakeFile("A.HEIC"))]), dropEffect: "copy" };
+
+    const zone = screen.getByRole("region", { name: "Photos" });
+    const over = createEvent.dragOver(zone, { dataTransfer: transfer });
+    fireEvent(zone, over);
+    const drop = createEvent.drop(zone, { dataTransfer: transfer });
+    fireEvent(zone, drop);
+
+    expect(over.defaultPrevented).toBe(true);
+    expect(transfer.dropEffect).toBe("none");
+    expect(drop.defaultPrevented).toBe(true);
+    expect(onFiles).not.toHaveBeenCalled();
+  });
+
+  it("queues a drop on a busy zone behind the running upload", async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started: string[] = [];
+    fakeServer({
+      "POST /api/cases/:case_id/photos": async (request): Promise<UploadResult> => {
+        const name = ((request.body as FormData).get("files") as File).name;
+        started.push(name);
+        if (name === "A.HEIC") await held;
+        return { job_id: null, added: [id(2)], skipped: [] };
+      },
+    });
+    function Busy() {
+      const { upload, progress } = useCaseUpload(CASE_ID);
+      return (
+        <DropZone
+          label="Photos"
+          queues
+          busy={progress === null ? null : "Uploading"}
+          onFiles={(files, unreadable) => {
+            void upload(files, unreadable);
+          }}
+        />
+      );
+    }
+    renderWithClient(<Busy />);
+    const zone = screen.getByRole("region", { name: "Photos" });
+
+    fireEvent.drop(zone, { dataTransfer: fakeTransfer([fileEntry(fakeFile("A.HEIC"))]) });
+    await screen.findByText("Uploading");
+    fireEvent.drop(zone, { dataTransfer: fakeTransfer([fileEntry(fakeFile("B.HEIC"))]) });
+    await Promise.resolve();
+    expect(started).toEqual(["A.HEIC"]);
+
+    release();
+    await waitFor(() => {
+      expect(started).toEqual(["A.HEIC", "B.HEIC"]);
+    });
   });
 });

@@ -18,6 +18,7 @@ import { queryKeys } from "../../api/queries";
 import type { CaseType, ConflictMode, ExportInclude, JobView } from "../../api/types";
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
+import { fill } from "../../lib/text";
 import { en } from "../../strings/en";
 
 type CaseTitle = { id: string; title: string };
@@ -39,8 +40,11 @@ function partsFor(target: ExportTarget): readonly ExportInclude[] {
   return target.caseType === "composite" ? ["composite"] : ["singles", "sequence"];
 }
 
-const phrase = (forms: { one: string; other: string }, n: number): string =>
-  (n === 1 ? forms.one : forms.other).replace("{n}", String(n));
+const phrase = (
+  forms: { one: string; other: string },
+  n: number,
+  extra: Readonly<Record<string, string>> = {},
+): string => fill(n === 1 ? forms.one : forms.other, { ...extra, n: String(n) });
 
 const baseName = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
 
@@ -79,12 +83,15 @@ export function ExportDialog(props: { target: ExportTarget; onClose: () => void 
 
   // The export wrote files and may have taught the classifier, so what the screens show is stale.
   const caseId = target.kind === "case" ? target.caseId : null;
+  const teaches = target.kind === "patient" || target.caseType === "composite";
   useEffect(() => {
     if (jobState !== "done") return;
     void queryClient.invalidateQueries({
       queryKey: caseId === null ? queryKeys.patients : queryKeys.case(caseId),
     });
-  }, [jobState, caseId, queryClient]);
+    // A composite or patient export teaches the classifier, so its counts are stale too.
+    if (teaches) void queryClient.invalidateQueries({ queryKey: queryKeys.classifier });
+  }, [jobState, caseId, teaches, queryClient]);
 
   const include = parts.filter((part) => chosen.has(part));
 
@@ -170,7 +177,9 @@ export function ExportDialog(props: { target: ExportTarget; onClose: () => void 
         <div className="flex flex-col gap-4">
           {job !== null && job.state === "failed" ? (
             <p role="alert" className="text-sm text-red-800">
-              {en.export.jobFailed.replace("{message}", job.error?.message ?? "")}
+              {fill(en.export.jobFailed, {
+                message: job.error?.message ?? job.message ?? en.export.failedUnknown,
+              })}
             </p>
           ) : job !== null && job.state === "done" ? (
             <Result job={job} target={target} />
@@ -209,9 +218,7 @@ function Progress({ job }: { job: JobView | null }) {
   return (
     <p role="status" className="text-sm text-slate-900">
       {job !== null && job.total > 0
-        ? en.export.progress
-            .replace("{done}", String(job.done))
-            .replace("{total}", String(job.total))
+        ? fill(en.export.progress, { done: String(job.done), total: String(job.total) })
         : en.export.working}
     </p>
   );
@@ -259,7 +266,7 @@ function learningLine(learning: NonNullable<ExportResult["learning"]>): string {
   }
   if (learning.error === "no_model") return en.export.learningNoModel;
   if (learning.error === "failed" && learning.message) {
-    return en.export.learningFailed.replace("{message}", learning.message);
+    return fill(en.export.learningFailed, { message: learning.message });
   }
   return en.export.learningUnknown;
 }
@@ -282,7 +289,7 @@ function CaseResult({ result }: { result: ExportResult }) {
       )}
       {result.failures.map((failure, index) => (
         <p key={`${failure.photo_id ?? ""}-${String(index)}`} className="text-red-800">
-          {en.export.failure.replace("{message}", failure.message)}
+          {fill(en.export.failure, { message: failure.message })}
         </p>
       ))}
       {skipped.pending > 0 && <p>{phrase(en.export.skippedPending, skipped.pending)}</p>}
@@ -300,17 +307,12 @@ function PatientResult(props: { result: PatientExportResult; cases: readonly Cas
     <ul className="flex flex-col gap-1 text-sm text-slate-900">
       {result.cases.map((entry) => (
         <li key={entry.case_id}>
-          {phrase(en.export.caseFiles, entry.files.length).replace(
-            "{title}",
-            titleOf(entry.case_id),
-          )}
+          {phrase(en.export.caseFiles, entry.files.length, { title: titleOf(entry.case_id) })}
         </li>
       ))}
       {result.failed_cases.map((entry) => (
         <li key={entry.case_id} className="text-red-800">
-          {en.export.caseFailed
-            .replace("{title}", titleOf(entry.case_id))
-            .replace("{message}", entry.message)}
+          {fill(en.export.caseFailed, { title: titleOf(entry.case_id), message: entry.message })}
         </li>
       ))}
     </ul>

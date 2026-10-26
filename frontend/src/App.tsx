@@ -14,7 +14,6 @@ import { en } from "./strings/en";
 
 const LIBRARY: Route = { name: "library" };
 
-// Placeholders until the screens of Tasks 10-16 replace them.
 function Screen({ route }: { route: Route }) {
   switch (route.name) {
     case "library":

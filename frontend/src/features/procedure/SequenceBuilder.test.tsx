@@ -120,7 +120,7 @@ describe("SequenceBuilder", () => {
     expect(save).toBeEnabled();
   });
 
-  it("refuses more than ten photos", () => {
+  it("shows no error for the unedited default of more than ten photos", () => {
     const photos = Array.from({ length: 11 }, (_, n) =>
       photoRecord({ id: id(n + 1), captured_at: `2026-10-16T10:${String(n).padStart(2, "0")}:00` }),
     );
@@ -128,16 +128,38 @@ describe("SequenceBuilder", () => {
     serve(view);
     renderWithClient(<SequenceBuilder view={view} />);
 
+    expect(screen.queryByText(/A sequence holds/)).toBeNull();
+    expect(screen.getByRole("button", { name: en.sequence.save })).toBeDisabled();
+  });
+
+  it("refuses more than ten photos once the selection is edited", async () => {
+    const photos = Array.from({ length: 11 }, (_, n) =>
+      photoRecord({ id: id(n + 1), captured_at: `2026-10-16T10:${String(n).padStart(2, "0")}:00` }),
+    );
+    const view = viewOf(photos, []);
+    serve(view);
+    const user = userEvent.setup();
+    renderWithClient(<SequenceBuilder view={view} />);
+
+    // Unticking and ticking again leaves 11 chosen, but the dentist has now edited the list.
+    const box = screen.getAllByRole("checkbox")[0] as HTMLElement;
+    await user.click(box);
+    await user.click(box);
+
     expect(screen.getByRole("button", { name: en.sequence.save })).toBeDisabled();
     expect(
       screen.getByText(fill(en.sequence.outOfRange, { min: "2", max: "10", count: "11" })),
     ).toBeVisible();
   });
 
-  it("refuses a single photo", () => {
+  it("refuses a single photo", async () => {
     const view = viewOf([a], []);
     serve(view);
+    const user = userEvent.setup();
     renderWithClient(<SequenceBuilder view={view} />);
+
+    await user.click(screen.getByRole("checkbox", { name: /a\.heic/ }));
+    await user.click(screen.getByRole("checkbox", { name: /a\.heic/ }));
 
     expect(screen.getByRole("button", { name: en.sequence.save })).toBeDisabled();
     expect(
