@@ -8,8 +8,10 @@ import {
   useDroppable,
   useSensor,
   useSensors,
+  type Announcements,
   type CollisionDetection,
   type DragEndEvent,
+  type UniqueIdentifier,
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { useId, type KeyboardEvent, type ReactNode } from "react";
@@ -173,7 +175,7 @@ function Tray<T>(props: { items: readonly T[]; board: SlotBoardProps<T> }) {
 
 /** The 3 x 3 slots and the tray below them; items move by drag or by their "Move to" select. */
 export function SlotBoard<T>(props: SlotBoardProps<T>) {
-  const { cells, tray, idOf, onMove } = props;
+  const { cells, tray, idOf, nameOf, onMove } = props;
   const sensors = useSensors(
     // A small distance keeps a click on the handle from starting a drag.
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -188,6 +190,32 @@ export function SlotBoard<T>(props: SlotBoardProps<T>) {
     return tray.some((item) => idOf(item) === id) ? "tray" : null;
   };
 
+  const nameOfId = (id: UniqueIdentifier): string => {
+    const items = [...SLOTS.map((slot) => cells[slot]), ...tray];
+    const item = items.find((candidate) => candidate !== null && idOf(candidate) === String(id));
+    return item ? nameOf(item) : "";
+  };
+  const labelOfWhere = (id: UniqueIdentifier): string => {
+    const where = String(id);
+    if (where === "tray") return en.board.tray;
+    const slot = SLOTS.find((candidate) => candidate === where);
+    return slot ? en.slots[slot] : where;
+  };
+  // dnd-kit's defaults speak internal ids ("Draggable item 3f2a… was dropped over droppable area
+  // upper_left"), which tells a screen-reader user nothing.
+  const announcements: Announcements = {
+    onDragStart: ({ active }) => fill(en.board.pickedUp, { name: nameOfId(active.id) }),
+    onDragOver: ({ active, over }) =>
+      over
+        ? fill(en.board.over, { name: nameOfId(active.id), where: labelOfWhere(over.id) })
+        : undefined,
+    onDragEnd: ({ active, over }) =>
+      over
+        ? fill(en.board.dropped, { name: nameOfId(active.id), where: labelOfWhere(over.id) })
+        : fill(en.board.droppedOutside, { name: nameOfId(active.id) }),
+    onDragCancel: ({ active }) => fill(en.board.dragCancelled, { name: nameOfId(active.id) }),
+  };
+
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over) return;
     const id = String(active.id);
@@ -196,7 +224,12 @@ export function SlotBoard<T>(props: SlotBoardProps<T>) {
   };
 
   return (
-    <DndContext sensors={sensors} collisionDetection={collision} onDragEnd={onDragEnd}>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={collision}
+      onDragEnd={onDragEnd}
+      accessibility={{ announcements }}
+    >
       <div className="flex flex-col gap-3">
         <div className="grid grid-cols-3 gap-2">
           {SLOTS.map((slot) => (

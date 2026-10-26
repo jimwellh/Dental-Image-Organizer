@@ -91,6 +91,23 @@ describe("SlotBoard", () => {
     expect(screen.getAllByText(en.board.checkPlacement)).toHaveLength(1);
   });
 
+  it("announces a keyboard drag by photo name and slot label, never by id", async () => {
+    renderBoard();
+    const user = userEvent.setup();
+
+    screen.getByRole("button", { name: fill(en.board.drag, { name: "Loose card" }) }).focus();
+    await user.keyboard(" ");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      fill(en.board.pickedUp, { name: "Loose card" }),
+    );
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      fill(en.board.dragCancelled, { name: "Loose card" }),
+    );
+    expect(screen.getByRole("status")).not.toHaveTextContent(/droppable|draggable/i);
+  });
+
   it("opens a placed item by double click or Enter, but not one in the tray", async () => {
     const onOpen = vi.fn();
     renderBoard({ onOpen });

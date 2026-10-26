@@ -292,6 +292,13 @@ export const en = {
     moveTo: "Move {name} to",
     drag: "Drag {name}",
     checkPlacement: "Check placement",
+    // Spoken by a screen reader during a keyboard drag, in place of dnd-kit's defaults, which
+    // read out internal ids.
+    pickedUp: "Picked up {name}.",
+    over: "{name} is over {where}.",
+    dropped: "{name} dropped on {where}.",
+    droppedOutside: "{name} dropped outside the board and was not moved.",
+    dragCancelled: "Moving {name} cancelled.",
   },
   ai: {
     // Spec §4.6: the size and the host come from `GET /model/status`.
