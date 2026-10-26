@@ -5,6 +5,7 @@ import { describeError } from "./api/http";
 import { Link, useRoute, type Route } from "./lib/router";
 import { CaseScreen } from "./features/case/CaseScreen";
 import { LibraryScreen } from "./features/library/LibraryScreen";
+import { TeachScreen } from "./features/teach/TeachScreen";
 import { Shell } from "./features/shell/Shell";
 import { useNotify } from "./features/shell/notify";
 import { NoticeProvider } from "./features/shell/Notices";
@@ -20,7 +21,7 @@ function Screen({ route }: { route: Route }) {
     case "case":
       return <CaseScreen caseId={route.caseId} />;
     case "teach":
-      return <h1 className="text-xl font-semibold">{en.nav.teach}</h1>;
+      return <TeachScreen />;
     case "settings":
       return <h1 className="text-xl font-semibold">{en.nav.settings}</h1>;
     case "notFound":
