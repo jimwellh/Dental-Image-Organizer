@@ -54,6 +54,10 @@ class AppDirs:
         return self.config / "settings.json"
 
     @property
+    def launcher_file(self) -> Path:
+        return self.config / "launcher.json"
+
+    @property
     def classifier(self) -> Path:
         return self.data / "classifier"
 
@@ -82,8 +86,24 @@ class AppDirs:
         return self.cache / "teach"
 
     @property
+    def update_check_file(self) -> Path:
+        return self.cache / "update-check.json"
+
+    @property
+    def update_script(self) -> Path:
+        return self.cache / "update.sh"
+
+    @property
+    def update_result_file(self) -> Path:
+        return self.cache / "update-result.json"
+
+    @property
     def log_file(self) -> Path:
         return self.log / "dio.log"
+
+    @property
+    def update_log_file(self) -> Path:
+        return self.log / "update.log"
 
 
 def app_dirs() -> AppDirs:

@@ -4,7 +4,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from dental_image_organizer.config import Settings, SettingsStore
+from dental_image_organizer.config import (
+    LauncherPaths,
+    Settings,
+    SettingsStore,
+    read_launcher,
+    write_launcher,
+)
 from dental_image_organizer.core.slots import DEFAULT_FLIPS, SLOTS
 from dental_image_organizer.errors import StorageError
 
@@ -25,6 +31,7 @@ def test_defaults_match_the_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert s.flip_pins == {}
     assert s.cache_max_gb == 2.0
     assert s.idle_shutdown_minutes == 30
+    assert s.update_check is True
 
 
 def test_missing_file_gives_defaults_and_writes_nothing(tmp_path: Path) -> None:
@@ -81,3 +88,35 @@ def test_settings_from_a_newer_version_ask_for_an_update(tmp_path: Path) -> None
 
     with pytest.raises(StorageError, match="newer version"):
         SettingsStore(p)
+
+
+def test_launcher_paths_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "config" / "launcher.json"
+    paths = LauncherPaths(uv_path=tmp_path / "uv", dio_path=tmp_path / "dio")
+
+    write_launcher(path, paths)
+
+    assert read_launcher(path) == paths
+
+
+def test_launcher_paths_may_lack_uv(tmp_path: Path) -> None:
+    path = tmp_path / "launcher.json"
+    write_launcher(path, LauncherPaths(uv_path=None, dio_path=tmp_path / "dio"))
+
+    record = read_launcher(path)
+
+    assert record is not None and record.uv_path is None
+
+
+def test_launcher_paths_must_be_absolute(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        LauncherPaths(uv_path=Path("uv"), dio_path=tmp_path / "dio")
+
+
+@pytest.mark.parametrize("content", [b"", b"{", b'{"dio_path": "dio", "uv_path": null}', b"[]"])
+def test_an_unusable_launcher_record_reads_as_none(tmp_path: Path, content: bytes) -> None:
+    path = tmp_path / "launcher.json"
+    path.write_bytes(content)
+
+    assert read_launcher(path) is None
+    assert read_launcher(tmp_path / "missing.json") is None

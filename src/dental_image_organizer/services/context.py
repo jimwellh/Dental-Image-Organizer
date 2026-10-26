@@ -22,6 +22,7 @@ from dental_image_organizer.services.ai import AiRuntime
 from dental_image_organizer.services.jobs import JobManager, JobSnapshot
 from dental_image_organizer.services.originals import ReferenceCache
 from dental_image_organizer.services.teach import TeachSessions
+from dental_image_organizer.services.updates import UpdateService
 from dental_image_organizer.storage.cache import BlobCache
 from dental_image_organizer.storage.library import CaseLocks, Library
 
@@ -42,6 +43,7 @@ class AppContext:
     ai: AiRuntime
     references: ReferenceCache
     executor: ThreadPoolExecutor
+    updates: UpdateService
     # One Library per root: it holds the scan index, so every caller must share it.
     _library: Library = field(init=False, repr=False)
     teach: TeachSessions = field(init=False)
@@ -110,6 +112,7 @@ def create_context(
         ai=AiRuntime(dirs, model_spec, http_client=http_client),
         references=ReferenceCache(),
         executor=executor,
+        updates=UpdateService(dirs, http_client=http_client),
     )
     ctx.teach = TeachSessions(ctx)
     # Only at startup: later in the run, an import in this process may be staging its folder.

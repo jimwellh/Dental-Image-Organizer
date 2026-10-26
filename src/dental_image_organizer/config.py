@@ -1,4 +1,5 @@
-"""User settings (spec §4.11), stored as `settings.json` in the app's config folder."""
+"""User settings (spec §4.11), stored as `settings.json` in the app's config folder, and the
+launcher's record of the `uv` and `dio` paths, stored beside it as `launcher.json` (spec §7.3)."""
 
 import json
 import os
@@ -44,6 +45,8 @@ class Settings(BaseModel):
     flip_pins: dict[Slot, Flip] = Field(default_factory=dict)
     cache_max_gb: float = Field(default=2.0, gt=0, le=100)
     idle_shutdown_minutes: int = Field(default=30, ge=0, le=1440)
+    # The daily version check against PyPI (spec §4.13); opt-out.
+    update_check: bool = True
 
     @field_validator("library_root")
     @classmethod
@@ -118,3 +121,41 @@ class SettingsStore:
             return Settings.model_validate(raw)
         except ValidationError as exc:
             raise damaged from exc
+
+
+class LauncherPaths(BaseModel):
+    """What `dio install-launcher` recorded for the in-app update (spec §7.3).
+
+    Kept out of `Settings`: the page saves the settings it read, so a server started before the
+    launcher was installed would erase these paths on its next save.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    # None when no `uv` was found; the update then names the Terminal command instead.
+    uv_path: Path | None
+    dio_path: Path
+
+    @field_validator("uv_path", "dio_path")
+    @classmethod
+    def _absolute(cls, value: Path | None) -> Path | None:
+        # A server started from Finder has a minimal PATH, so a bare name would not resolve.
+        if value is not None and not value.is_absolute():
+            raise ValueError("launcher paths must be absolute")
+        return value
+
+
+def read_launcher(path: Path) -> LauncherPaths | None:
+    """The recorded paths, or None when the launcher was never installed or the file is unusable."""
+    try:
+        return LauncherPaths.model_validate_json(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValidationError):
+        # Only the in-app update reads it, and that falls back to the Terminal command.
+        return None
+
+
+def write_launcher(path: Path, paths: LauncherPaths) -> None:
+    write_atomic(path, paths.model_dump_json(indent=2).encode("utf-8"))

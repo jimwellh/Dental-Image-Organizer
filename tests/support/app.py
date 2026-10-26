@@ -40,7 +40,8 @@ def make_context(
 ) -> AppContext:
     dirs = AppDirs(root / "config", root / "data", root / "cache", root / "log")
     # model_validate, not model_copy: the overrides must pass the same checks as a saved file.
-    values = {"library_root": root / "library", **settings}
+    # The version check stays off unless a test turns it on: tests never ask PyPI.
+    values = {"library_root": root / "library", "update_check": False, **settings}
     SettingsStore(dirs.settings_file).put(Settings.model_validate(values))
     return create_context(
         dirs, model_spec=model_spec or DEFAULT_MODEL, workers=2, http_client=http_client

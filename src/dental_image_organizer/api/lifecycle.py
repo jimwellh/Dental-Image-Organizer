@@ -1,5 +1,6 @@
-"""Idle shutdown (spec §4.3): the server stops after `idle_shutdown_minutes` without a
-heartbeat, but never while a job runs."""
+"""Background duties of a running server: idle shutdown (spec §4.3), which stops it after
+`idle_shutdown_minutes` without a heartbeat but never while a job runs, and the daily version
+check (spec §4.13)."""
 
 from __future__ import annotations
 
@@ -16,6 +17,9 @@ from dental_image_organizer.services.context import AppContext
 log = structlog.get_logger(__name__)
 
 IDLE_CHECK_S = 15.0
+# How often the server asks whether the day's version check is due; the check itself runs at
+# most once a day (`UpdateService.check_due`).
+UPDATE_POLL_S = 3600.0
 
 
 class IdleWatch:
@@ -39,13 +43,18 @@ class IdleWatch:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    watch = asyncio.create_task(_watch_idle(app.state.ctx, app.state.idle, app.state.shutdown))
+    tasks = [
+        asyncio.create_task(_watch_idle(app.state.ctx, app.state.idle, app.state.shutdown)),
+        asyncio.create_task(_check_updates(app.state.ctx)),
+    ]
     try:
         yield
     finally:
-        watch.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watch
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 async def _watch_idle(ctx: AppContext, idle: IdleWatch, shutdown: Callable[[], None]) -> None:
@@ -56,3 +65,17 @@ async def _watch_idle(ctx: AppContext, idle: IdleWatch, shutdown: Callable[[], N
             log.info("idle_shutdown")
             shutdown()
             return
+
+
+async def _check_updates(ctx: AppContext) -> None:
+    while True:
+        # Read on every round, so turning the check off in Settings takes effect at once.
+        if ctx.settings.get().update_check and ctx.updates.check_due():
+            try:
+                # In a thread: the request blocks for up to its timeout.
+                await asyncio.to_thread(ctx.updates.check)
+            except Exception:
+                # `check` handles the expected failures; anything else must not end the loop,
+                # or the server would never check again until it restarts.
+                log.exception("update_check_crashed")
+        await asyncio.sleep(UPDATE_POLL_S)

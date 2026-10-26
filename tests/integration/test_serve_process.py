@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from dental_image_organizer.config import Settings, SettingsStore
 from dental_image_organizer.instance import InstanceInfo, InstanceLock, read_instance
 from dental_image_organizer.paths import APP_DIR_ENV, AppDirs, app_dirs
 
@@ -88,6 +89,8 @@ def stop(dirs: AppDirs) -> None:
 def dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[AppDirs]:
     monkeypatch.setenv(APP_DIR_ENV, str(tmp_path / "app"))
     app = app_dirs()
+    # A test server must not ask PyPI for the newest version.
+    SettingsStore(app.settings_file).put(Settings(update_check=False))
     try:
         yield app
     finally:
