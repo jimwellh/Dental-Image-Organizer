@@ -25,6 +25,19 @@ pytestmark = pytest.mark.skipif(
     any(shutil.which(tool) is None for tool in TOOLS), reason="needs a POSIX sh and its tools"
 )
 
+
+def _shell() -> str:
+    """The `sh` to run the script with, one that keeps the PATH it is given.
+
+    Git for Windows' `bin\\sh.exe` is a wrapper that puts its own `/usr/bin` first on PATH, where
+    the real `uname` would shadow the fake; the MSYS shell it wraps, `usr\\bin\\sh.exe`, does not.
+    """
+    found = shutil.which("sh")
+    assert found is not None
+    wrapped = Path(found).parent.parent / "usr" / "bin" / "sh.exe"
+    return str(wrapped) if Path(found).parent.name.lower() == "bin" and wrapped.is_file() else found
+
+
 # One body for every fake: it logs its name and arguments, then acts by name.
 FAKE = """#!/bin/sh
 name=$(basename "$0")
@@ -86,8 +99,7 @@ def _run(tmp_path: Path, fake_bin: Path, *, stdin: str | None = None, **env: str
     if "SYSTEMROOT" in os.environ:
         # Windows programs, such as the MSYS shell, need it to start.
         environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
-    sh = shutil.which("sh")
-    assert sh is not None
+    sh = _shell()
     args = [sh] if stdin is not None else [sh, str(SCRIPT)]
     done = subprocess.run(
         args,
