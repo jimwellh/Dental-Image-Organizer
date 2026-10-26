@@ -8,6 +8,7 @@ import { DropZone } from "../intake/DropZone";
 import { useCaseUpload } from "../intake/useCaseUpload";
 import { CompareView } from "./CompareView";
 import { ReferencePanel } from "./ReferencePanel";
+import { SequenceBuilder } from "./SequenceBuilder";
 import { Timeline } from "./Timeline";
 
 export function ProcedureScreen({ view }: { view: CaseView }) {
@@ -43,6 +44,7 @@ export function ProcedureScreen({ view }: { view: CaseView }) {
         <h2 className="text-lg font-semibold text-slate-900">{en.procedure.timeline.title}</h2>
         <Timeline view={view} onCompare={setComparing} />
       </section>
+      <SequenceBuilder view={view} />
       {comparing !== null && (
         <CompareView
           view={view}

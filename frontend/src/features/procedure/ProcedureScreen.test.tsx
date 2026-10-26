@@ -17,7 +17,11 @@ const reference = photoRecord({
   source_name: "reference.jpg",
 });
 
-const tile = (photo: PhotoRecord) => screen.getByText(photo.source_name).closest("li");
+// The sequence builder lists the same names, so a tile is looked up inside the timeline.
+const tile = (photo: PhotoRecord) =>
+  within(screen.getByRole("region", { name: en.procedure.timeline.title }))
+    .getByText(photo.source_name)
+    .closest("li");
 
 function serveView(view: CaseView) {
   return fakeServer({

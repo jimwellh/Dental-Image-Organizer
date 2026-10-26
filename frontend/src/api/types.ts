@@ -26,7 +26,11 @@ export type TeachPhotoView = Schemas["TeachPhotoView"];
 export type TeachUpload = Schemas["TeachUpload"];
 export type ImportResult = Schemas["ImportResult"];
 export type ExportRequest = Schemas["ExportRequest"];
-export type CasePatch = Schemas["CasePatch"];
+// The generator marks a field with a server default as required, even in a request. `gap_px`
+// defaults to 0 on the server, so a caller that does not set it leaves it out.
+export type CasePatch = Omit<Schemas["CasePatch"], "sequence"> & {
+  sequence?: Omit<NonNullable<Schemas["CasePatch"]["sequence"]>, "gap_px"> & { gap_px?: number };
+};
 export type PhotoPatch = Schemas["PhotoPatch"];
 export type PatientPatch = Schemas["PatientPatch"];
 export type CaseCreate = Schemas["CaseCreate"];
