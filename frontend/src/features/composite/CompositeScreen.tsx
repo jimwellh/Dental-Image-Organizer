@@ -17,6 +17,7 @@ import { ExportDialog } from "../export/ExportDialog";
 import { DropZone } from "../intake/DropZone";
 import { useCaseUpload } from "../intake/useCaseUpload";
 import { cellsOf, moveRequest, trayOf } from "./board";
+import { CellEditor } from "./CellEditor";
 
 const frame = "aspect-[4/3] w-full rounded bg-slate-200 object-cover";
 
@@ -163,6 +164,7 @@ function RerunAssignment({ view }: { view: CaseView }) {
 export function CompositeScreen({ view }: { view: CaseView }) {
   const caseId = view.case.id;
   const [exporting, setExporting] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   const { upload, progress } = useCaseUpload(caseId);
   const move = useCaseChange(caseId, (args: { photoId: string; patch: PhotoPatch }) =>
     patchPhoto(caseId, args.photoId, args.patch),
@@ -218,6 +220,9 @@ export function CompositeScreen({ view }: { view: CaseView }) {
             const patch = moveRequest(view, photoId, target);
             if (patch !== null) move.mutate({ photoId, patch });
           }}
+          onOpen={(photo) => {
+            setEditing(photo.id);
+          }}
         />
         <div className="flex flex-wrap items-center gap-6">
           <BaselinePicker view={view} />
@@ -229,6 +234,15 @@ export function CompositeScreen({ view }: { view: CaseView }) {
           src={compositeUrl(view, "preview")}
           alt={en.composite.preview}
           className="max-w-full rounded-md bg-slate-200"
+        />
+      )}
+      {editing !== null && (
+        <CellEditor
+          view={view}
+          photoId={editing}
+          onClose={() => {
+            setEditing(null);
+          }}
         />
       )}
       {exporting && (

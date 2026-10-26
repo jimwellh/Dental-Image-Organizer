@@ -323,6 +323,18 @@ export const en = {
     rerunFailed: "The assignment failed: {message}",
     preview: "Composite preview",
   },
+  cell: {
+    title: "Edit cell",
+    close: "Close",
+    unavailable: "This photo has no geometry to edit yet.",
+    surfaceLabel: "Cell editor",
+    surface:
+      "Drag to move, Shift-drag to rotate, scroll or pinch to zoom, arrow keys to nudge, [ and ] to rotate, plus and minus to zoom.",
+    flip: "Flip",
+    flipNote:
+      "Choosing a flip recomputes this cell's geometry, which drops any manual move, zoom, and rotation.",
+    reset: "Reset to auto",
+  },
   jobs: {
     lost: "The app restarted before this finished; start it again.",
   },

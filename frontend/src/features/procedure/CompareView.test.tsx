@@ -18,6 +18,7 @@ import {
 } from "../../lib/transform";
 import { en } from "../../strings/en";
 import { errorReply, fakeServer, type FakeServer } from "../../test/fakeServer";
+import { stubBoundingRect } from "../../test/geometry";
 import { editRecord, id, photoRecord, procedureView } from "../../test/records";
 import { NoticeProvider } from "../shell/Notices";
 import { useNotify } from "../shell/notify";
@@ -102,17 +103,7 @@ function placePairs(photoPoints: readonly Point[], referencePoints: readonly Poi
 }
 
 beforeEach(() => {
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-    left: 0,
-    top: 0,
-    right: 500,
-    bottom: 375,
-    x: 0,
-    y: 0,
-    width: 500,
-    height: 375,
-    toJSON: () => ({}),
-  });
+  stubBoundingRect();
 });
 
 afterEach(() => {

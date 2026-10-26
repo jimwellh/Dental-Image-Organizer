@@ -10,6 +10,7 @@ import {
   type Mat3,
   type Point,
 } from "../lib/transform";
+import { stubBoundingRect } from "../test/geometry";
 import {
   COMMIT_DELAY_MS,
   KEY_ZOOM,
@@ -57,17 +58,7 @@ function setup() {
 }
 
 beforeEach(() => {
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-    left: 0,
-    top: 0,
-    right: 500,
-    bottom: 375,
-    x: 0,
-    y: 0,
-    width: 500,
-    height: 375,
-    toJSON: () => ({}),
-  });
+  stubBoundingRect();
 });
 
 afterEach(() => {
