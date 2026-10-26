@@ -1840,6 +1840,11 @@
             "default": true,
             "title": "Strip Gps",
             "type": "boolean"
+          },
+          "update_check": {
+            "default": true,
+            "title": "Update Check",
+            "type": "boolean"
           }
         },
         "title": "Settings",
@@ -2124,6 +2129,115 @@
           "skipped"
         ],
         "title": "TeachUpload",
+        "type": "object"
+      },
+      "UpdateFailureView": {
+        "properties": {
+          "log_file": {
+            "title": "Log File",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "log_file"
+        ],
+        "title": "UpdateFailureView",
+        "type": "object"
+      },
+      "UpdateStatus": {
+        "description": "The version check's answer and whether \"Update now\" can run here (spec §7.3).",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "can_update": {
+            "title": "Can Update",
+            "type": "boolean"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "current": {
+            "title": "Current",
+            "type": "string"
+          },
+          "last_failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UpdateFailureView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "current",
+          "latest",
+          "available",
+          "checked_at",
+          "can_update",
+          "unavailable_reason",
+          "command",
+          "last_failure"
+        ],
+        "title": "UpdateStatus",
+        "type": "object"
+      },
+      "Updating": {
+        "properties": {
+          "status": {
+            "const": "updating",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Updating",
         "type": "object"
       },
       "UploadResult": {
@@ -4483,6 +4597,100 @@
           }
         },
         "summary": "Shutdown"
+      }
+    },
+    "/api/system/update": {
+      "get": {
+        "operationId": "update_status_api_system_update_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request is not valid."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "Update Status"
+      },
+      "post": {
+        "operationId": "start_update_api_system_update_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Updating"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request is not valid."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "Start Update"
       }
     }
   }

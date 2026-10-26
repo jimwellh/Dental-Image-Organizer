@@ -398,6 +398,23 @@ export function SettingsScreen() {
           }}
         />
 
+        <div className="flex flex-col gap-1">
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-900">
+            <input
+              type="checkbox"
+              checked={draft.update_check}
+              aria-describedby="settings-update-check-help"
+              onChange={(event) => {
+                update({ update_check: event.target.checked });
+              }}
+            />
+            {en.settings.updateCheck.label}
+          </label>
+          <p id="settings-update-check-help" className="text-sm text-slate-700">
+            {en.settings.updateCheck.help}
+          </p>
+        </div>
+
         <div className="flex flex-wrap items-center gap-3">
           <Button
             type="submit"

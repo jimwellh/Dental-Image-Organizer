@@ -20,6 +20,8 @@ import type {
   TeachConfirm,
   TeachSessionView,
   TeachUpload,
+  UpdateStatus,
+  Updating,
   UploadResult,
 } from "./types";
 
@@ -30,6 +32,8 @@ export const heartbeat = () => sendJson<undefined>("POST", apiPath("/api/heartbe
 export const shutdown = () => sendJson<Stopping>("POST", apiPath("/api/system/shutdown"));
 export const reveal = (path: string) =>
   sendJson<undefined>("POST", apiPath("/api/system/reveal"), { path });
+export const updateStatus = () => getJson<UpdateStatus>(apiPath("/api/system/update"));
+export const startUpdate = () => sendJson<Updating>("POST", apiPath("/api/system/update"));
 
 export const getSettings = () => getJson<Settings>(apiPath("/api/settings"));
 export const putSettings = (settings: Settings) =>

@@ -8,11 +8,12 @@ import type {
   JobView,
   ModelStatus,
   PatientRecord,
-  PatientsView,
   PatientView,
+  PatientsView,
   PhotoRecord,
   Settings,
   Slot,
+  UpdateStatus,
 } from "../api/types";
 
 // Builders for the server's records. Each default is valid for the generated types; a test
@@ -220,6 +221,7 @@ export function settingsRecord(overrides: Partial<Settings> = {}): Settings {
     flip_pins: {},
     cache_max_gb: 2,
     idle_shutdown_minutes: 30,
+    update_check: true,
     ...overrides,
   };
 }
@@ -258,6 +260,21 @@ export function jobView(overrides: Partial<JobView> = {}): JobView {
     message: null,
     result: null,
     error: null,
+    ...overrides,
+  };
+}
+
+/** No newer release, nothing failed, and no in-app update: what a development server answers. */
+export function updateStatusView(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
+  return {
+    current: "1.0.0",
+    latest: null,
+    available: false,
+    checked_at: null,
+    can_update: false,
+    unavailable_reason: "In-app update works on macOS only.",
+    command: "uv tool upgrade dental-image-organizer",
+    last_failure: null,
     ...overrides,
   };
 }

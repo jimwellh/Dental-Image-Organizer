@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { App } from "./App";
 import { en } from "./strings/en";
 import { fakeServer } from "./test/fakeServer";
-import { patientsView } from "./test/records";
+import { patientsView, updateStatusView } from "./test/records";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -12,6 +12,7 @@ function serve() {
   fakeServer({
     "POST /api/heartbeat": () => undefined,
     "GET /api/health": () => ({ status: "ok", version: "0" }),
+    "GET /api/system/update": () => updateStatusView(),
     // Declared now so the library screen needs no change here.
     "GET /api/patients": () => patientsView(),
   });
