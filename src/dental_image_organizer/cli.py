@@ -1,5 +1,7 @@
 """Command-line interface (spec §4.10)."""
 
+import os
+import shutil
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from enum import StrEnum
@@ -9,12 +11,13 @@ from typing import Annotated
 import typer
 
 from dental_image_organizer import __version__, server
-from dental_image_organizer.config import SettingsStore
+from dental_image_organizer.config import LauncherPaths, SettingsStore, write_launcher
 from dental_image_organizer.core.slots import DEFAULT_FLIPS, FLIPS, SLOTS, Flip, Slot, parse_slot
 from dental_image_organizer.errors import CaseExistsError, DioError
 from dental_image_organizer.instance import InstanceLock
+from dental_image_organizer.launcher import macos
 from dental_image_organizer.log import configure_logging
-from dental_image_organizer.paths import app_dirs
+from dental_image_organizer.paths import APP_DIR_ENV, app_dirs
 from dental_image_organizer.services.composite import DEFAULT_BASELINE
 from dental_image_organizer.services.headless import PhotoOutcome, ProcedureReport, run_procedure
 from dental_image_organizer.services.headless_composite import (
@@ -24,6 +27,7 @@ from dental_image_organizer.services.headless_composite import (
     run_composite,
 )
 from dental_image_organizer.services.procedure import OUTPUT_SCALES
+from dental_image_organizer.services.updates import UPGRADE_COMMAND
 from dental_image_organizer.storage.archive import import_case_archive, write_case_archive
 from dental_image_organizer.storage.library import CASE_FILE, PATIENT_FILE, CaseLocks, Library
 
@@ -84,6 +88,85 @@ def serve(
     code = start(port=port, open_browser=not no_browser, verbose=verbose)
     if code:
         raise typer.Exit(code)
+
+
+_ApplicationsDir = Annotated[
+    Path | None,
+    typer.Option(
+        "--applications-dir",
+        help="Put the app here instead of ~/Applications (for tests).",
+        hidden=True,
+        file_okay=False,
+    ),
+]
+
+
+@app.command("install-launcher")
+def install_launcher(
+    uv_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--uv-path",
+            help="The uv that installed the app, recorded for in-app updates. "
+            "Default: the uv on PATH.",
+            dir_okay=False,
+        ),
+    ] = None,
+    applications_dir: _ApplicationsDir = None,
+) -> None:
+    """macOS: add the Dental Image Organizer app to ~/Applications, for the Dock and Spotlight."""
+    _require_macos("install-launcher")
+    configure_logging("WARNING")
+    uv = _resolve_uv(uv_path)
+    try:
+        dio = macos.default_dio_path()
+        target = macos.install_launcher(
+            dio_path=dio,
+            applications_dir=applications_dir or macos.default_applications_dir(),
+            app_dir=os.environ.get(APP_DIR_ENV),
+        )
+        write_launcher(app_dirs().launcher_file, LauncherPaths(uv_path=uv, dio_path=dio))
+    except (DioError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Created {target}")
+    if uv is None:
+        typer.echo(
+            "uv was not found, so the app cannot update itself. "
+            f"To update, run in Terminal: {UPGRADE_COMMAND}"
+        )
+
+
+@app.command("uninstall-launcher")
+def uninstall_launcher(applications_dir: _ApplicationsDir = None) -> None:
+    """macOS: remove the Dental Image Organizer app from ~/Applications; the library is kept."""
+    _require_macos("uninstall-launcher")
+    configure_logging("WARNING")
+    try:
+        removed = macos.uninstall_launcher(applications_dir or macos.default_applications_dir())
+        app_dirs().launcher_file.unlink(missing_ok=True)
+    except (DioError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Removed {removed}" if removed is not None else "No launcher was installed.")
+
+
+def _require_macos(command: str) -> None:
+    if not macos.supported():
+        typer.echo(
+            f"error: dio {command} is not supported on this system; it is for macOS.", err=True
+        )
+        raise typer.Exit(1)
+
+
+def _resolve_uv(given: Path | None) -> Path | None:
+    if given is not None:
+        path = given.expanduser().absolute()
+        if not path.is_file():
+            raise typer.BadParameter(f"{given} is not a file", param_hint="--uv-path")
+        return path
+    found = shutil.which("uv")
+    return Path(found).absolute() if found is not None else None
 
 
 @app.command()

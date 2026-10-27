@@ -39,6 +39,8 @@ export type ManualEdit = Schemas["ManualEdit"];
 export type ErrorResponse = Schemas["ErrorResponse"];
 export type Health = Schemas["Health"];
 export type Stopping = Schemas["Stopping"];
+export type UpdateStatus = Schemas["UpdateStatus"];
+export type Updating = Schemas["Updating"];
 
 // The optional fields below default on the server, so the generator makes them optional.
 export type Slot = NonNullable<PhotoRecord["slot"]>;

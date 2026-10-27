@@ -90,6 +90,16 @@ class NotReadyError(ConflictError):
     code = "not_ready"
 
 
+class UpdateUnavailableError(ConflictError):
+    """In-app update cannot run here; the message names the Terminal command instead."""
+
+    code = "update_unavailable"
+
+
+class LauncherError(DioError):
+    code = "launcher_error"
+
+
 class InvalidRequestError(DioError):
     code = "invalid_request"
 

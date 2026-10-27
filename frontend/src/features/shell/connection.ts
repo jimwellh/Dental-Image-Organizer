@@ -5,11 +5,13 @@ export const HEARTBEAT_MS = 30_000;
 export const HEALTH_MS = 5_000;
 export const LOST_AFTER_MS = 10_000;
 export const RECONNECT_MS = 2_000;
+// An update that has not brought the server back by then is reported as a closed app, whose
+// notice tells the user how to reopen it.
+export const UPDATE_TIMEOUT_MS = 10 * 60_000;
 // How often the silence is measured; the state flips within this much of `LOST_AFTER_MS`.
 const WATCH_MS = 1_000;
 
-/** Plan 5 adds `"updating"`. */
-export type ConnectionState = "connected" | "closed";
+export type ConnectionState = "connected" | "closed" | "updating";
 
 const reloadPage = () => {
   window.location.reload();
@@ -23,9 +25,17 @@ const ignore = () => undefined;
  * Keeps the server alive with heartbeats and notices when it stops answering. A hung request never
  * calls `lastOk`, so no timeout or abort is needed: silence is the signal.
  */
-export function useServerConnection(options: { reload?: () => void } = {}): {
+export function useServerConnection(
+  options: {
+    reload?: () => void;
+    /** The server came back from an update at the version the page runs: nothing changed. */
+    onUpdateUnchanged?: () => void;
+  } = {},
+): {
   state: ConnectionState;
   markClosed: () => void;
+  /** The server is updating from `version`; the page reloads once it answers with another. */
+  markUpdating: (version: string) => void;
 } {
   const [state, setState] = useState<ConnectionState>("connected");
   // A deliberate close (Quit) is followed by a server that still answers for a moment while it
@@ -35,11 +45,18 @@ export function useServerConnection(options: { reload?: () => void } = {}): {
     deliberateClose.current = true;
     setState("closed");
   }, []);
+  const updatingFrom = useRef("");
+  const markUpdating = useCallback((version: string) => {
+    updatingFrom.current = version;
+    setState("updating");
+  }, []);
 
-  // The latest `reload`, without restarting the polling when a caller passes a new function.
+  // The latest callbacks, without restarting the polling when a caller passes new functions.
   const reload = useRef(options.reload ?? reloadPage);
+  const onUpdateUnchanged = useRef(options.onUpdateUnchanged);
   useEffect(() => {
     reload.current = options.reload ?? reloadPage;
+    onUpdateUnchanged.current = options.onUpdateUnchanged;
   });
 
   useEffect(() => {
@@ -111,5 +128,40 @@ export function useServerConnection(options: { reload?: () => void } = {}): {
     };
   }, [state]);
 
-  return { state, markClosed };
+  useEffect(() => {
+    if (state !== "updating") return;
+    let settled = false;
+    // The old server answers until it exits; only an answer after a failure is the new one.
+    let sawFailure = false;
+    const timer = window.setInterval(() => {
+      health().then(
+        (answer) => {
+          if (settled || !sawFailure) return;
+          settled = true;
+          if (answer.version !== updatingFrom.current) {
+            reload.current();
+          } else {
+            // The update script started the version the page already runs again.
+            setState("connected");
+            onUpdateUnchanged.current?.();
+          }
+        },
+        () => {
+          sawFailure = true;
+        },
+      );
+    }, RECONNECT_MS);
+    const giveUp = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      deliberateClose.current = false;
+      setState("closed");
+    }, UPDATE_TIMEOUT_MS);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(giveUp);
+    };
+  }, [state]);
+
+  return { state, markClosed, markUpdating };
 }

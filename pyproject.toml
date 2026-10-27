@@ -1,6 +1,6 @@
 [project]
 name = "dental-image-organizer"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Local Mac app that aligns, color-matches, and composes clinical intraoral photos."
 readme = "README.md"
 license = "MIT"
@@ -12,6 +12,7 @@ dependencies = [
   "numpy>=2.0",
   "onnxruntime>=1.24",
   "opencv-python-headless>=4.10",
+  "packaging>=24.0",
   "pillow>=11.0",
   "pi-heif>=1.0",
   "platformdirs>=4.3",
@@ -46,10 +47,16 @@ dev = [
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+# The built UI is gitignored, and hatchling skips ignored files unless they are named here. Set
+# for both targets: `uv build` builds the wheel from the sdist, which must carry the UI too.
+artifacts = ["src/dental_image_organizer/web/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/dental_image_organizer"]
-# The built UI is gitignored, and hatchling skips ignored files unless they are named here.
-artifacts = ["src/dental_image_organizer/web/**"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src"]
 
 [tool.ruff]
 line-length = 100
@@ -124,3 +131,12 @@ name = "the API never imports the CLI or the server"
 type = "forbidden"
 source_modules = ["dental_image_organizer.api"]
 forbidden_modules = ["dental_image_organizer.cli", "dental_image_organizer.server"]
+
+[[tool.importlinter.contracts]]
+name = "the launcher never imports the API, the services, the CLI, or the server"
+type = "forbidden"
+source_modules = ["dental_image_organizer.launcher"]
+forbidden_modules = [
+  "dental_image_organizer.api", "dental_image_organizer.services",
+  "dental_image_organizer.cli", "dental_image_organizer.server",
+]

@@ -2,12 +2,14 @@ import { createEvent, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { en } from "../../strings/en";
 import { errorReply, fakeServer } from "../../test/fakeServer";
+import { updateStatusView } from "../../test/records";
 import { renderWithClient } from "../../test/render";
 import { Shell } from "./Shell";
 
 const routes = {
   "POST /api/heartbeat": () => undefined,
   "GET /api/health": () => ({ status: "ok", version: "0" }),
+  "GET /api/system/update": () => updateStatusView(),
 };
 
 test("Quit shows the closed notice at once", async () => {
@@ -80,4 +82,29 @@ test("a drag that carries no files is left alone", () => {
   fireEvent(window, drop);
 
   expect(drop.defaultPrevented).toBe(false);
+});
+
+test("Update now replaces the page with the updating notice", async () => {
+  const user = userEvent.setup();
+  fakeServer({
+    ...routes,
+    "GET /api/system/update": () =>
+      updateStatusView({
+        latest: "1.2.0",
+        available: true,
+        can_update: true,
+        unavailable_reason: null,
+      }),
+    "POST /api/system/update": () => ({ status: "updating" }),
+  });
+  renderWithClient(
+    <Shell>
+      <p>content</p>
+    </Shell>,
+  );
+
+  await user.click(await screen.findByRole("button", { name: en.update.now }));
+
+  expect(await screen.findByText(en.shell.updating)).toBeInTheDocument();
+  expect(screen.queryByText("content")).not.toBeInTheDocument();
 });

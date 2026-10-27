@@ -722,7 +722,7 @@ never overwritten silently: the export screen offers "Replace previous export" o
 | Command | Purpose |
 |---|---|
 | `dio serve [--port N] [--no-browser] [--detach]` | Start the local server (§4.3) |
-| `dio install-launcher [--uv-path PATH]` / `dio uninstall-launcher` | macOS only: create or remove `~/Applications/Dental Image Organizer.app` (§7.3), and record the absolute `uv` and `dio` paths for in-app updates. Other OSes print "not supported". |
+| `dio install-launcher [--uv-path PATH]` / `dio uninstall-launcher` | macOS only: create or remove `~/Applications/Dental Image Organizer.app` (§7.3), and record the absolute `uv` and `dio` paths for in-app updates in `launcher.json`. Other OSes print "not supported". A hidden `--applications-dir` puts the app elsewhere, for tests. |
 | `dio process --reference REF --out DIR PHOTOS...` | Headless Feature 1. This is the extension point for future adapters. |
 | `dio composite PHOTOS... --out DIR --patient NAME --tag TAG [--order SLOTS] [--baseline SLOT] [--flip SLOT=FLIP]... [--assign FILE=SLOT\|tray]... [--learn] [--download-model]` | Headless Feature 2; `--learn` stores the run as confirmed samples (§3.3 step 7) |
 | `dio export-case CASE_DIR ZIP` / `dio import-case ZIP` | Case archive round trip |
@@ -752,10 +752,13 @@ by Time Machine.
 
 | Directory | Contents |
 |---|---|
-| config | `settings.json` (including `uv_path` and `dio_path` for in-app updates, and `flip_start` / `flip_pins`, §4.7.2) |
+| config | `settings.json` (including `update_check`, and `flip_start` / `flip_pins`, §4.7.2); `launcher.json` (`uv_path` and `dio_path` for in-app updates, written by `install-launcher`) |
 | data | `classifier/` (`samples.npz`, `model.json`, `flips.json`), `instance.lock`, `instance.json` (port, pid) |
-| cache | render cache (LRU-capped), model file, export zips, teaching sessions, update script |
-| log | `dio.log` |
+| cache | render cache (LRU-capped), model file, export zips, teaching sessions, `update-check.json` (last version check), `update.sh` and `update-result.json` (in-app update) |
+| log | `dio.log`; `update.log` (the update script's output) |
+
+`launcher.json` is kept apart from `settings.json` because the page saves the settings it read:
+a server started before `install-launcher` ran would otherwise erase the paths on its next save.
 
 When the environment variable `DIO_APP_DIR` is set, the four directories are
 `$DIO_APP_DIR/{config,data,cache,log}` and the default library is `$DIO_APP_DIR/library`. Tests and
@@ -843,7 +846,8 @@ send the archive again with the answer.
 | `POST /heartbeat` | Keep-alive for idle shutdown |
 | `POST /system/shutdown` | Quit |
 | `POST /system/reveal` | Reveal a library path in Finder / Explorer (path must be inside the library) |
-| `POST /system/update` | Start the in-app update (§7.3); 409 while a job is running |
+| `GET /system/update` | `{current, latest, available, checked_at, can_update, unavailable_reason, command, last_failure}`: the version check's answer (`latest` is null while the check is off), whether "Update now" can run here, the Terminal command otherwise, and the last update's failure with the update log's path |
+| `POST /system/update` | Start the in-app update (§7.3); 409 `job_running` while a job is running, 409 `update_unavailable` where it cannot run (off macOS, no launcher record) or while one is already starting |
 | `GET / PUT /settings` | Read / update settings |
 | `GET /patients` | Patients with notes and case summaries, plus the folders that could not be read (damaged, saved by a newer version, or duplicated), so a damaged case is visible instead of silently missing |
 | `PATCH /patients/{id}` | Update a patient's name or note |
@@ -932,7 +936,9 @@ and return 500 with a generic message.
 - Only three kinds of outbound calls:
   1. the model download (explicit consent);
   2. the version check against `https://pypi.org/pypi/dental-image-organizer/json`, at most once
-     per day, disclosed in Settings, opt-out;
+     per day, disclosed in Settings, opt-out. It takes the newest final release that has an
+     unyanked file (pre-releases never count). A failed check keeps the last answer and still
+     counts as the day's check; the answer is kept in `update-check.json` across restarts;
   3. the in-app update, started by the user, which runs `uv tool upgrade` against PyPI (§7.3).
 
 **Deployment impact of the backend:** a pure-Python wheel; no compiled code of our own; all heavy
@@ -989,7 +995,11 @@ dependencies come as prebuilt wheels, so `uv tool install` needs no compiler on 
   - If the server is gone (idle shutdown, Quit, or crash), the UI replaces the
     page with a full-screen notice: "Dental Image Organizer has closed. Click its Dock icon to
     reopen." It keeps polling `/api/health` and reloads when the server is back.
-  - During an in-app update, the notice reads "Updating…" instead (§7.3).
+  - During an in-app update, the notice reads "Updating…" instead (§7.3). The page polls
+    `/api/health`; an answer counts only after a failed poll, because the old server answers
+    until it exits. A new version reloads the page. The same version returns to the app, which
+    shows the failure from `GET /system/update`, or says that nothing newer was installed. After
+    10 minutes without an answer the page shows the closed notice.
   - A Quit button sits in the header.
 - **Accessibility.** All actions are reachable by keyboard: arrow keys nudge the transform, and
   `[` / `]` rotate. Focus rings are visible, and contrast is AA.
@@ -1036,6 +1046,7 @@ Dental-Image-Organizer/
 │       └── features/{shell,intake,export,library,case,procedure,ai,composite,teach,settings}/
 ├── scripts/
 │   ├── install.sh               # end-user installer (macOS)
+│   ├── smoke_macos.sh           # the macOS smoke test of §7.2 and §7.5
 │   ├── export_openapi.py        # writes the OpenAPI schema without starting a server
 │   └── export_dinov2_onnx.py    # maintainer-only: export + quantize the embedding model
 ├── tests/
@@ -1116,11 +1127,21 @@ curl -LsSf https://raw.githubusercontent.com/jimwellh/Dental-Image-Organizer/mai
 4. Runs `dio install-launcher --uv-path "<absolute path to uv>"`. This uses `osacompile` to create
    `~/Applications/Dental Image Organizer.app`, an AppleScript applet that runs
    `"<absolute path to dio>" serve --detach`, and sets the app icon.
+   - The icon is drawn with Pillow at install time. `CFBundleIconName` is removed from
+     `Info.plist` (it would prefer the asset catalog's icon), and the bundle is signed again ad
+     hoc (`codesign --sign -`) after its icon and `Info.plist` change.
+   - The bundle is built beside the target and swapped in, so a failed build keeps the old one.
+     An existing app of that name is replaced or removed only if its bundle id is ours.
+   - When `DIO_APP_DIR` is set, the applet keeps it.
    - `~/Applications` is created if it does not exist; a fresh macOS account may not have it.
    - The bundle is created locally, so it has no `com.apple.quarantine` attribute and **Gatekeeper
      does not prompt**.
    - The absolute path avoids the minimal `PATH` of Finder-launched apps.
-   - The absolute `uv` and `dio` paths are recorded in settings for the in-app update.
+   - The absolute `uv` and `dio` paths are recorded in `launcher.json` for the in-app update.
+     Without a `uv`, the launcher is still made, and the app shows the Terminal command instead.
+   - Overrides: `DIO_WHEEL` (install that wheel instead of the PyPI release),
+     `DIO_APPLICATIONS_DIR` (where the launcher goes), `DIO_NO_OPEN=1` (skip step 5). The smoke
+     test uses all three.
 5. Opens the app once, so that its icon appears in the Dock. Then it prints how to keep the icon
    there (right-click the icon → Options → Keep in Dock), along with the update and uninstall
    commands. Pinning to the Dock is left to the user rather than scripted, because scripting it
@@ -1135,12 +1156,16 @@ replaced Launchpad, so the instructions do not rely on it.)
 - **In the app (default).** When the daily version check finds a newer release, a banner offers
   **Update now** (`POST /api/system/update`, refused with 409 while a job is running).
   1. The server writes a short POSIX shell script to the cache directory and starts it detached
-     with `/bin/sh`, sending its output to the log file. Then the server shuts down.
+     with `/bin/sh`, sending its output to `update.log` (`dio.log` holds JSON lines and
+     rotates). Then the server shuts down.
      - A shell script is used because `uv tool upgrade` replaces the tool's virtual environment,
        so the updater must not run from inside it.
   2. The script waits for the server process to exit (up to 30 s). It then runs
-     `"<uv>" tool upgrade dental-image-organizer`, and starts
-     `"<dio>" serve --detach --no-browser`.
+     `"<uv>" tool upgrade dental-image-organizer`, writes the outcome (`ok` or `failed`) to
+     `update-result.json`, and starts `"<dio>" serve --detach --no-browser`, which reads the
+     outcome once and reports a failure through `GET /system/update`.
+     - If the server does not exit in time, the script changes nothing, records `timeout`, and
+       does not restart it.
      - The absolute paths come from settings (recorded by `install-launcher`), because a server
        started from Finder has a minimal `PATH`.
   3. The open page shows "Updating…", keeps polling `/api/health`, and reloads when the reported
@@ -1171,6 +1196,9 @@ library folder is kept.
   `dental_image_organizer/web/index.html`.
 - **macOS smoke:** the same install, launcher, and health smoke test as in the release workflow,
   run against a freshly built wheel on `macos-latest` (arm64, matching the supported hardware).
+  `scripts/smoke_macos.sh` holds it for both workflows; it also starts an in-app update and waits
+  for the restarted server.
+- **Shell:** ShellCheck on `scripts/install.sh` and `scripts/smoke_macos.sh`.
 
 ## 8. Testing Strategy
 

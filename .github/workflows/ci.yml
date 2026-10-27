@@ -61,3 +61,33 @@ jobs:
         run: |
           uv build --wheel
           unzip -l dist/*.whl | grep -q "dental_image_organizer/web/index.html"
+
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # shellcheck comes with the Ubuntu runner image.
+      - run: shellcheck --shell=sh scripts/install.sh scripts/smoke_macos.sh
+
+  macos-smoke:
+    name: macOS smoke
+    # Spec §7.5: the install, launcher, and health smoke test of the release workflow, on every
+    # change, against a freshly built wheel on Apple silicon.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: uv build --wheel
+      - run: sh scripts/smoke_macos.sh dist/*.whl

@@ -12,10 +12,13 @@ import {
   getTeachSession,
   listPatients,
   modelStatus,
+  updateStatus,
 } from "./endpoints";
 import type { CaseView } from "./types";
 
 export const PENDING_POLL_MS = 1500;
+// The server checks PyPI at most once a day; an open page asks it again every hour.
+export const UPDATE_POLL_MS = 60 * 60 * 1000;
 
 export const queryKeys = {
   patients: ["patients"],
@@ -24,6 +27,7 @@ export const queryKeys = {
   classifier: ["classifier"],
   model: ["model"],
   teach: (sessionId: string) => ["teach", sessionId],
+  update: ["update"],
 } as const;
 
 /** `onMutationError` is the one place a failed mutation is shown, unless it sets `meta.quiet`. */
@@ -48,6 +52,8 @@ export const useSettings = () => useQuery({ queryKey: queryKeys.settings, queryF
 export const useClassifier = () =>
   useQuery({ queryKey: queryKeys.classifier, queryFn: classifierStatus });
 export const useModelStatus = () => useQuery({ queryKey: queryKeys.model, queryFn: modelStatus });
+export const useUpdateStatus = () =>
+  useQuery({ queryKey: queryKeys.update, queryFn: updateStatus, refetchInterval: UPDATE_POLL_MS });
 
 export function useCase(caseId: string) {
   return useQuery({

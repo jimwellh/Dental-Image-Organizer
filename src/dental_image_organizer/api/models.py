@@ -22,6 +22,7 @@ from dental_image_organizer.services.flips import FlipStatus
 from dental_image_organizer.services.intake import UploadOutcome, UploadSkipReason
 from dental_image_organizer.services.jobs import JobSnapshot, JobState
 from dental_image_organizer.services.teach import SessionState, TeachSession
+from dental_image_organizer.services.updates import UpdateInfo
 from dental_image_organizer.storage.archive import ImportOutcome
 from dental_image_organizer.storage.library import LibraryListing, PatientEntry
 from dental_image_organizer.storage.schema import (
@@ -54,6 +55,48 @@ class Health(BaseModel):
 
 class Stopping(BaseModel):
     status: Literal["stopping"]
+
+
+class Updating(BaseModel):
+    status: Literal["updating"]
+
+
+class UpdateFailureView(BaseModel):
+    message: str
+    log_file: str
+
+
+class UpdateStatus(BaseModel):
+    """The version check's answer and whether "Update now" can run here (spec §7.3)."""
+
+    current: str
+    # None until a check succeeded, or while the check is turned off.
+    latest: str | None
+    available: bool
+    checked_at: datetime | None
+    can_update: bool
+    # Why `can_update` is false; the page then shows `command` for Terminal.
+    unavailable_reason: str | None
+    command: str
+    last_failure: UpdateFailureView | None
+
+    @classmethod
+    def of(cls, info: UpdateInfo) -> UpdateStatus:
+        failure = (
+            None
+            if info.failure is None
+            else UpdateFailureView(message=info.failure, log_file=str(info.log_file))
+        )
+        return cls(
+            current=info.current,
+            latest=info.latest,
+            available=info.available,
+            checked_at=info.checked_at,
+            can_update=info.blocker is None,
+            unavailable_reason=info.blocker,
+            command=info.command,
+            last_failure=failure,
+        )
 
 
 class RevealRequest(BaseModel):

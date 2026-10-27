@@ -57,6 +57,22 @@ describe("SettingsScreen", () => {
     expect(screen.getByRole("button", { name: en.settings.save })).toBeDisabled();
   });
 
+  it("turning off the update check saves it", async () => {
+    const server = serve();
+    renderWithClient(<SettingsScreen />);
+    const user = userEvent.setup();
+
+    const check = await screen.findByRole("checkbox", { name: en.settings.updateCheck.label });
+    expect(check).toBeChecked();
+    expect(check).toHaveAccessibleDescription(en.settings.updateCheck.help);
+    await user.click(check);
+    await user.click(screen.getByRole("button", { name: en.settings.save }));
+
+    await waitFor(() => {
+      expect(putBodies(server)).toEqual([settingsRecord({ update_check: false })]);
+    });
+  });
+
   it("refuses a value outside its bounds before sending it", async () => {
     const server = serve();
     renderWithClient(<SettingsScreen />);

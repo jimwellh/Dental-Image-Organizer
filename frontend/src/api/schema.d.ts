@@ -573,6 +573,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/system/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Update Status */
+        get: operations["update_status_api_system_update_get"];
+        put?: never;
+        /** Start Update */
+        post: operations["start_update_api_system_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1192,6 +1210,11 @@ export interface components {
              * @default true
              */
             strip_gps: boolean;
+            /**
+             * Update Check
+             * @default true
+             */
+            update_check: boolean;
         };
         /** SkippedView */
         SkippedView: {
@@ -1273,6 +1296,42 @@ export interface components {
             session_id: string | null;
             /** Skipped */
             skipped: components["schemas"]["SkippedView"][];
+        };
+        /** UpdateFailureView */
+        UpdateFailureView: {
+            /** Log File */
+            log_file: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * UpdateStatus
+         * @description The version check's answer and whether "Update now" can run here (spec §7.3).
+         */
+        UpdateStatus: {
+            /** Available */
+            available: boolean;
+            /** Can Update */
+            can_update: boolean;
+            /** Checked At */
+            checked_at: string | null;
+            /** Command */
+            command: string;
+            /** Current */
+            current: string;
+            last_failure: components["schemas"]["UpdateFailureView"] | null;
+            /** Latest */
+            latest: string | null;
+            /** Unavailable Reason */
+            unavailable_reason: string | null;
+        };
+        /** Updating */
+        Updating: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "updating";
         };
         /** UploadResult */
         UploadResult: {
@@ -3169,6 +3228,100 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Stopping"];
+                };
+            };
+            /** @description The request is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_status_api_system_update_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
+                };
+            };
+            /** @description The request is not valid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    start_update_api_system_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Updating"];
                 };
             };
             /** @description The request is not valid. */

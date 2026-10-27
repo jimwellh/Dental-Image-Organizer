@@ -11,6 +11,17 @@ export const en = {
   },
   shell: {
     closed: "Dental Image Organizer has closed. Click its Dock icon to reopen.",
+    updating: "Updating… The app reopens here when the update has finished.",
+  },
+  update: {
+    available: "Version {latest} is available; you have {current}.",
+    now: "Update now",
+    starting: "Starting the update…",
+    terminal: "To update, quit the app, then run in Terminal:",
+    failed: "{message} The details are in {log}.",
+    unchanged:
+      "The update finished, but this is still version {current}. Try again later, or update in Terminal: {command}",
+    startFailed: "Could not start the update: {message}",
   },
   common: {
     cancel: "Cancel",
@@ -403,6 +414,11 @@ export const en = {
     idleShutdown: {
       label: "Close the app after idle minutes",
       help: "0 to 1440. 0 never shuts down.",
+    },
+    updateCheck: {
+      label: "Check for updates once a day",
+      // Spec §4.13: the check is disclosed in Settings.
+      help: "Asks pypi.org for the newest version number. Nothing about you or your photos is sent.",
     },
     flips: {
       title: "Flips for each view",
