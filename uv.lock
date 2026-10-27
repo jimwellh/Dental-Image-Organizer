@@ -139,7 +139,7 @@ wheels = [
 
 [[package]]
 name = "dental-image-organizer"
-version = "0.1.0.dev0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

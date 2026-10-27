@@ -1,6 +1,6 @@
 [project]
 name = "dental-image-organizer"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Local Mac app that aligns, color-matches, and composes clinical intraoral photos."
 readme = "README.md"
 license = "MIT"

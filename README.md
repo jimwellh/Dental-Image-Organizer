@@ -3,8 +3,8 @@
 Automated alignment, color matching, and collage generation for clinical intraoral photos.
 It runs locally on the dentist's Mac.
 
-> **Status: early development, not released yet.** The app, its install script, the Dock
-> launcher, and in-app updates are built; the first release to PyPI is next. See the
+> **Status: early release (0.1.0).** Review processed images before relying on them, and
+> report problems in the issue tracker. See the
 > [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
 
 ## What it does
@@ -45,8 +45,8 @@ The only network access is:
 
 ## Installation (macOS)
 
-Requires an Apple Silicon Mac with macOS 14 Sonoma or later. Once the app is released,
-installation is one command in Terminal:
+Requires an Apple Silicon Mac with macOS 14 Sonoma or later. Installation is one command in
+Terminal:
 
 ```sh
 curl -LsSf https://raw.githubusercontent.com/jimwellh/Dental-Image-Organizer/main/scripts/install.sh | sh
