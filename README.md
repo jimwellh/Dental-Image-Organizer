@@ -18,7 +18,9 @@ It runs locally on the dentist's Mac.
   - cropped to its framing.
 - Output: individual photos plus a horizontal, chronological sequence image.
 
-**9-photo composite**
+![alt text](image.png)
+
+**9-photo composite (Beta)**
 
 - Nine standard intraoral views are automatically placed in a 3 × 3 grid by an AI view
   classifier.
