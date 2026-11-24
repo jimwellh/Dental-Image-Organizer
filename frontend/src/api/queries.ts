@@ -43,8 +43,17 @@ export function createQueryClient(onMutationError: (error: unknown) => void): Qu
   });
 }
 
+/** Whether the server is still processing photos of the case, so the view will change. */
 export function hasPending(view: CaseView): boolean {
-  return view.case.photos.some((photo) => photo.state === "pending");
+  const { photos } = view.case;
+  if (photos.some((photo) => photo.state === "pending")) return true;
+  // Setting a reference keeps the other photos `ready` but drops their edits until its job aligns
+  // them again; with a ready reference, a ready photo without an edit is one still in that job.
+  const reference = photos.find((photo) => photo.role === "reference");
+  return (
+    reference?.state === "ready" &&
+    photos.some((photo) => photo.role !== "reference" && photo.state === "ready" && !photo.edit)
+  );
 }
 
 export const usePatients = () => useQuery({ queryKey: queryKeys.patients, queryFn: listPatients });
