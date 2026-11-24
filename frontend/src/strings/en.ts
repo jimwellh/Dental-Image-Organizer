@@ -193,6 +193,12 @@ export const en = {
     reference: {
       title: "Reference",
       drop: "Drop the edited pre-op photo",
+      dropHelp:
+        "Drop it here or choose a file. You can also copy a cropped image, for example in Keynote, and paste it with ⌘V.",
+      replaceHint: "To replace it, drop an image on this panel or paste one with ⌘V.",
+      replaceDropConfirm: "Replace",
+      unreadableFormat:
+        "{name} could not be read. Save it as PNG or JPEG, or copy it again, and try once more.",
       processing: "Processing…",
       locked: "Locked",
       replace: "Replace reference…",

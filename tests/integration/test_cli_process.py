@@ -211,6 +211,45 @@ def test_unwritable_output_folder_is_an_error_not_a_traceback(
     assert "error:" in result.output
 
 
+def test_a_reference_without_a_capture_time_leads_the_sequence(
+    case_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A crop exported from Keynote: a PNG without EXIF, saved after every photo was taken.
+    reference = tmp_path / "reference.png"
+    with Image.open(case_dir / "reference.jpg") as decoded:
+        decoded.save(reference, format="PNG")
+    stamp = datetime(2026, 11, 24, 15).timestamp()
+    os.utime(reference, (stamp, stamp))
+    real_render_reference = headless.render_reference
+    real_render_sequence = headless.render_sequence
+    magenta = (255, 0, 255)
+    frames: list[np.ndarray] = []
+
+    def marked_reference(*args: Any, **kwargs: Any) -> np.ndarray:
+        image = real_render_reference(*args, **kwargs).copy()
+        image[:] = magenta
+        return image
+
+    def recording_sequence(images: list[np.ndarray], **kwargs: Any) -> np.ndarray:
+        frames.extend(images)
+        return real_render_sequence(images, **kwargs)
+
+    monkeypatch.setattr(headless, "render_reference", marked_reference)
+    monkeypatch.setattr(headless, "render_sequence", recording_sequence)
+
+    run_procedure(
+        reference,
+        [case_dir / "IMG_0001.jpg", case_dir / "IMG_0002.jpg"],
+        tmp_path / "out",
+        patient="A",
+        title="B",
+    )
+
+    assert len(frames) == 3
+    assert (frames[0] == magenta).all()
+    assert not any((frame == magenta).all() for frame in frames[1:])
+
+
 def test_unexpected_error_in_one_photo_fails_only_that_photo(
     case_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

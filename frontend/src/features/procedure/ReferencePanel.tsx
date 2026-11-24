@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { patchCase, setReference } from "../../api/endpoints";
 import { photoImageUrl } from "../../api/images";
 import { queryKeys, useCaseChange } from "../../api/queries";
@@ -7,11 +7,15 @@ import type { CaseView } from "../../api/types";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { anyDialogOpen } from "../../components/dialogStack";
+import { imagesFromClipboard, pastedIntoText } from "../../lib/clipboardImages";
 import { partitionFiles } from "../../lib/dropFiles";
+import { toUploadable } from "../../lib/imageFormat";
 import { skipSummary } from "../../lib/skipped";
 import { fill } from "../../lib/text";
 import { en } from "../../strings/en";
 import { DropZone } from "../intake/DropZone";
+import { useFileDrop } from "../intake/useFileDrop";
 import { useNotify } from "../shell/notify";
 
 const SCALES = [1, 1.5, 2] as const;
@@ -78,7 +82,13 @@ export function ReferencePanel({ view }: { view: CaseView }) {
   // A ref, not `isPending`: the picker can deliver twice before React renders the disabled state.
   const uploading = useRef(false);
   const [confirming, setConfirming] = useState(false);
+  // A dropped or pasted image waiting for the dentist to confirm that it replaces the reference.
+  const [replacement, setReplacement] = useState<File | null>(null);
+  // The same file in a ref: a double click on the confirm button must send one request.
+  const pendingReplacement = useRef<File | null>(null);
   const reference = view.case.photos.find((photo) => photo.role === "reference");
+  // A failed reference is retried rather than replaced, so it needs no confirmation.
+  const hasReference = reference !== undefined && reference.state !== "failed";
 
   const upload = useMutation({
     mutationFn: (file: File) => setReference(caseId, file),
@@ -98,22 +108,72 @@ export function ReferencePanel({ view }: { view: CaseView }) {
     },
   });
 
-  const send = (files: File[]) => {
+  /**
+   * Every way in: the picker, a drop, or a paste. A drop or paste over a reference asks first;
+   * the picker only opens after the dentist confirmed, so it passes `confirmed`.
+   */
+  const receive = async (files: File[], { confirmed = false } = {}) => {
     const { upload: accepted, skipped } = partitionFiles(files);
     const lines = skipSummary(skipped);
     if (accepted.length > 1) lines.push(en.procedure.reference.onlyFirstUsed);
     if (lines.length > 0) notify({ kind: "info", lines });
-    const file = accepted[0];
-    if (file === undefined || uploading.current) return;
+    const first = accepted[0];
+    if (first === undefined || uploading.current) return;
+    // Held from here until the upload settles or the replacement is cancelled: a second drop or
+    // paste must not start another upload while this one is converted or confirmed.
     uploading.current = true;
+    let file: File;
+    try {
+      file = await toUploadable(first);
+    } catch {
+      uploading.current = false;
+      notify({
+        kind: "error",
+        lines: [fill(en.procedure.reference.unreadableFormat, { name: first.name })],
+      });
+      return;
+    }
+    if (hasReference && !confirmed) {
+      pendingReplacement.current = file;
+      setReplacement(file);
+      return;
+    }
     upload.mutate(file);
   };
+
+  // The paste listener lives for the panel's lifetime and always calls the current `receive`.
+  const receiveRef = useRef(receive);
+  useEffect(() => {
+    receiveRef.current = receive;
+  });
+
+  useEffect(() => {
+    // On `document`: a crop copied in Keynote is pasted wherever focus happens to be on the page.
+    const onPaste = (event: ClipboardEvent) => {
+      if (pastedIntoText(event.target) || anyDialogOpen()) return;
+      const files = imagesFromClipboard(event.clipboardData);
+      if (files.length === 0) return;
+      event.preventDefault();
+      void receiveRef.current(files);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("paste", onPaste);
+    };
+  }, []);
+
+  const { dragging, handlers } = useFileDrop({
+    inactive: upload.isPending,
+    onFiles: (files) => {
+      void receive(files);
+    },
+  });
 
   const onChoose = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     // So choosing the same file again still fires `change`.
     event.target.value = "";
-    send(files);
+    void receive(files, { confirmed: true });
   };
 
   const showDrop = reference === undefined || reference.state === "failed";
@@ -121,7 +181,10 @@ export function ReferencePanel({ view }: { view: CaseView }) {
   return (
     <section
       aria-label={en.procedure.reference.title}
-      className="flex flex-col gap-4 rounded-lg border border-slate-300 bg-white p-4"
+      {...handlers}
+      className={`flex flex-col gap-4 rounded-lg border bg-white p-4 ${
+        dragging ? "border-sky-700 ring-2 ring-sky-700" : "border-slate-300"
+      }`}
     >
       <h2 className="text-lg font-semibold text-slate-900">{en.procedure.reference.title}</h2>
 
@@ -134,10 +197,13 @@ export function ReferencePanel({ view }: { view: CaseView }) {
         <DropZone
           label={en.procedure.reference.drop}
           // Not `multiple={false}`: that keeps the first dropped file before the filter, so a folder
-          // starting with an `.AAE` or `.MOV` would set no reference. `send` picks the first photo.
+          // starting with an `.AAE` or `.MOV` would set no reference. `receive` picks the first photo.
           multiple
+          help={en.procedure.reference.dropHelp}
           busy={upload.isPending ? en.procedure.reference.uploading : null}
-          onFiles={send}
+          onFiles={(files) => {
+            void receive(files);
+          }}
         />
       )}
       {reference?.state === "pending" && (
@@ -170,6 +236,7 @@ export function ReferencePanel({ view }: { view: CaseView }) {
             disabled={upload.isPending}
             onChange={onChoose}
           />
+          <p className="basis-full text-sm text-slate-700">{en.procedure.reference.replaceHint}</p>
         </div>
       )}
       {confirming && (
@@ -184,6 +251,24 @@ export function ReferencePanel({ view }: { view: CaseView }) {
             setConfirming(false);
             // In the same click: the picker only opens for a user gesture.
             input.current?.click();
+          }}
+        />
+      )}
+      {replacement !== null && (
+        <ConfirmDialog
+          title={en.procedure.reference.replaceTitle}
+          body={en.procedure.reference.replaceBody}
+          confirmLabel={en.procedure.reference.replaceDropConfirm}
+          onCancel={() => {
+            pendingReplacement.current = null;
+            setReplacement(null);
+            uploading.current = false;
+          }}
+          onConfirm={() => {
+            const file = pendingReplacement.current;
+            pendingReplacement.current = null;
+            setReplacement(null);
+            if (file) upload.mutate(file);
           }}
         />
       )}

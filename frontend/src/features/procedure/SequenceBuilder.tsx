@@ -23,7 +23,7 @@ import { Button } from "../../components/Button";
 import { fill } from "../../lib/text";
 import { en } from "../../strings/en";
 import { ExportDialog } from "../export/ExportDialog";
-import { captureOrder } from "./order";
+import { sequenceOrder } from "./order";
 
 export const SEQUENCE_MIN = 2;
 export const SEQUENCE_MAX = 10;
@@ -38,10 +38,10 @@ const SILENT: Announcements = {
 };
 const NO_INSTRUCTIONS = { draggable: "" };
 
-// As `procedure_case.sequence_photos`: the reference is a frame like any other, and a photo with
-// no edit yet has nothing to draw.
+// As `procedure_case.sequence_photos`: the reference leads whatever its capture time, and a photo
+// with no edit yet has nothing to draw.
 const usablePhotos = (view: CaseView): PhotoRecord[] =>
-  view.case.photos.filter((photo) => photo.state === "ready" && photo.edit).sort(captureOrder);
+  view.case.photos.filter((photo) => photo.state === "ready" && photo.edit).sort(sequenceOrder);
 
 function Thumb({ view, photo }: { view: CaseView; photo: PhotoRecord }) {
   return (

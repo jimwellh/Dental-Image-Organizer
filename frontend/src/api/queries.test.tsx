@@ -42,6 +42,17 @@ describe("hasPending", () => {
     ).toBe(true);
     expect(hasPending(ready)).toBe(false);
   });
+
+  it("is true while a new reference's job still aligns the other photos", () => {
+    const reference = photoRecord({ id: id(1), role: "reference" });
+    const unaligned = photoRecord({ id: id(2), edit: null });
+    expect(hasPending(procedureView([reference, unaligned]))).toBe(true);
+    expect(hasPending(procedureView([reference, photoRecord({ id: id(2) })]))).toBe(false);
+    // Without a ready reference, a photo without an edit waits for one: nothing is under way.
+    const failed = { ...reference, state: "failed" as const, edit: null };
+    expect(hasPending(procedureView([unaligned]))).toBe(false);
+    expect(hasPending(procedureView([failed, unaligned]))).toBe(false);
+  });
 });
 
 describe("useCase", () => {

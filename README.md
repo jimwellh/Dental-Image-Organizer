@@ -3,7 +3,7 @@
 Automated alignment, color matching, and collage generation for clinical intraoral photos.
 It runs locally on the dentist's Mac.
 
-> **Status: early release (0.1.0).** Review processed images before relying on them, and
+> **Status: early release (0.2.0).** Review processed images before relying on them, and
 > report problems in the issue tracker. See the
 > [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
 
@@ -11,7 +11,8 @@ It runs locally on the dentist's Mac.
 
 **Procedure sequences**
 
-- The dentist edits one pre-op photo on their iPhone, and it becomes the case reference.
+- The dentist edits one pre-op photo on their iPhone, or crops it in Keynote and drags or
+  pastes it in, and it becomes the case reference.
 - Intra-op and post-op photos are then automatically:
   - aligned to the reference (rotation, scale, translation, and perspective),
   - color-matched to it,

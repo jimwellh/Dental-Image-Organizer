@@ -102,7 +102,8 @@ def run_procedure(
         max_width=MAX_JPEG_DIMENSION,
         max_pixels=MAX_SEQUENCE_PIXELS,
     )
-    frames: list[Frame] = [(reference_time, scale_to_height(reference_image, strip_height))]
+    reference_frame = scale_to_height(reference_image, strip_height)
+    frames: list[Frame] = []
     outcomes: list[PhotoOutcome] = []
     for number, path in enumerate(photo_paths, start=1):
         # Alignment lives in core/, which must not know about photos; binding here tags its
@@ -116,7 +117,8 @@ def run_procedure(
             frames.append(frame)
 
     # Mixing EXIF times that carry an offset with naive file times must not break sorting;
-    # the recorded wall-clock time is what orders a single case.
+    # the recorded wall-clock time is what orders a single case. The reference leads whatever
+    # its time: a crop exported from Keynote or Preview carries only the export's file date.
     frames.sort(key=lambda frame: frame[0].replace(tzinfo=None))
     sequence_output = write_unique(
         out_dir,
@@ -124,7 +126,7 @@ def run_procedure(
         sequence_filename(patient, title, today or date.today()),
         encode_jpeg(
             render_sequence(
-                [image for _, image in frames],
+                [reference_frame, *(image for _, image in frames)],
                 max_width=MAX_JPEG_DIMENSION,
                 max_pixels=MAX_SEQUENCE_PIXELS,
             )

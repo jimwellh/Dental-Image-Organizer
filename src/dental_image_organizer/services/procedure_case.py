@@ -143,9 +143,13 @@ def set_reference(ctx: AppContext, case_id: str, upload: Upload) -> UploadOutcom
             photos.extend(created)
             sequence = case.sequence
             if sequence is not None and gone:
-                kept = [i for i in sequence.photo_ids if i not in gone]
-                # A selection set_sequence would refuse is never stored; the default capture
-                # order takes its place.
+                # The new reference takes the old one's place, so a replaced reference never
+                # silently leaves the sequence. A photo made the reference may already be in
+                # the selection; its first place is kept.
+                renamed = (reference.id if i in gone else i for i in sequence.photo_ids)
+                kept = list(dict.fromkeys(renamed))
+                # A selection set_sequence would refuse is never stored; the default order
+                # takes its place.
                 if len(kept) < SEQUENCE_SIZE[0]:
                     kept = []
                 sequence = sequence.model_copy(update={"photo_ids": kept})
@@ -635,7 +639,16 @@ def sequence_photos(case: CaseRecord) -> list[PhotoRecord]:
     chosen = case.sequence.photo_ids if case.sequence is not None else []
     if chosen:
         return [usable[i] for i in chosen if i in usable]
-    return sorted(usable.values(), key=capture_order)
+    return sorted(usable.values(), key=sequence_order)
+
+
+def sequence_order(photo: PhotoRecord) -> tuple[bool, datetime, str]:
+    """The default order: the reference first, then the photos in capture order.
+
+    The reference is often a crop copied out of Keynote or Preview, which carries no capture
+    time: its provisional upload time must not move it behind the photos.
+    """
+    return (photo.role != "reference", *capture_order(photo))
 
 
 def capture_order(photo: PhotoRecord) -> tuple[datetime, str]:

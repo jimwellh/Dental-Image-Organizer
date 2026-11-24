@@ -1,10 +1,10 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CaseView, PhotoRecord } from "../../api/types";
 import { fill } from "../../lib/text";
 import { en } from "../../strings/en";
-import { fakeFile, fakeTransfer, fileEntry } from "../../test/fakeDrop";
+import { fakeClipboard, fakeFile, fakeTransfer, fileEntry } from "../../test/fakeDrop";
 import { fakeServer, type FakeServer } from "../../test/fakeServer";
 import { editRecord, id, photoRecord, procedureView } from "../../test/records";
 import { renderWithClient } from "../../test/render";
@@ -232,6 +232,111 @@ describe("ProcedureScreen", () => {
     expect(await screen.findByText(en.skip.rawAdvice)).toBeInTheDocument();
   });
 
+  it("a pasted image becomes the reference when there is none", async () => {
+    const view = procedureView([]);
+    const server = serveView(view);
+    renderWithClient(<ProcedureScreen view={view} />);
+
+    const handled = !fireEvent.paste(document, {
+      clipboardData: fakeClipboard([fakeFile("image.png", "image/png")]),
+    });
+
+    expect(handled).toBe(true);
+    await sent(server, "PUT");
+    const put = server.calls.find((call) => call.method === "PUT");
+    expect(((put?.body as FormData).get("file") as File).name).toBe("image.png");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("pasting over a reference asks first", async () => {
+    const view = procedureView([reference]);
+    const server = serveView(view);
+    const user = userEvent.setup();
+    renderWithClient(<ProcedureScreen view={view} />);
+    const paste = () =>
+      fireEvent.paste(document, {
+        clipboardData: fakeClipboard([fakeFile("image.png", "image/png")]),
+      });
+
+    paste();
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: en.common.cancel }),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(server.calls.filter((call) => call.method === "PUT")).toHaveLength(0);
+
+    paste();
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: en.procedure.reference.replaceDropConfirm,
+      }),
+    );
+    await sent(server, "PUT");
+  });
+
+  it("dropping an image on a locked reference asks first", async () => {
+    const view = procedureView([reference]);
+    const server = serveView(view);
+    const user = userEvent.setup();
+    renderWithClient(<ProcedureScreen view={view} />);
+    const panel = screen.getByRole("region", { name: en.procedure.reference.title });
+    expect(within(panel).getByText(en.procedure.reference.replaceHint)).toBeInTheDocument();
+
+    fireEvent.drop(panel, {
+      dataTransfer: fakeTransfer([fileEntry(fakeFile("crop.png", "image/png"))]),
+    });
+    const dialog = await screen.findByRole("dialog");
+    expect(server.calls.filter((call) => call.method === "PUT")).toHaveLength(0);
+    await user.dblClick(
+      within(dialog).getByRole("button", { name: en.procedure.reference.replaceDropConfirm }),
+    );
+
+    // A double click on the confirm button still sends one request.
+    await sent(server, "PUT");
+    const put = server.calls.find((call) => call.method === "PUT");
+    expect(((put?.body as FormData).get("file") as File).name).toBe("crop.png");
+  });
+
+  it("leaves a paste into a text field, a text paste, and a paste under a dialog alone", async () => {
+    const view = procedureView([reference]);
+    const server = serveView(view);
+    const user = userEvent.setup();
+    renderWithClient(<ProcedureScreen view={view} />);
+    const image = () => ({ clipboardData: fakeClipboard([fakeFile("image.png", "image/png")]) });
+
+    const field = document.createElement("input");
+    document.body.append(field);
+    try {
+      expect(fireEvent.paste(field, image())).toBe(true);
+    } finally {
+      field.remove();
+    }
+    expect(fireEvent.paste(document, { clipboardData: fakeClipboard([], { text: "16" }) })).toBe(
+      true,
+    );
+
+    await user.click(screen.getByRole("button", { name: en.procedure.reference.replace }));
+    expect(fireEvent.paste(document, image())).toBe(true);
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(server.calls.filter((call) => call.method === "PUT")).toHaveLength(0);
+  });
+
+  it("says so when the browser cannot read a pasted image", async () => {
+    vi.stubGlobal("createImageBitmap", () => Promise.reject(new Error("undecodable")));
+    const view = procedureView([]);
+    const server = serveView(view);
+    renderWithClient(<ProcedureScreen view={view} />);
+
+    fireEvent.paste(document, {
+      clipboardData: fakeClipboard([fakeFile("crop.tiff", "image/tiff")]),
+    });
+
+    expect(
+      await screen.findByText(fill(en.procedure.reference.unreadableFormat, { name: "crop.tiff" })),
+    ).toBeInTheDocument();
+    expect(server.calls.filter((call) => call.method === "PUT")).toHaveLength(0);
+  });
+
   it("suggests a larger output when the photos carry more detail", async () => {
     const view = procedureView([reference], {
       suggested_output_scale: 1.5,
@@ -284,6 +389,18 @@ describe("ProcedureScreen", () => {
     expect(
       within(tile(photo) as HTMLElement).getByText(en.procedure.tile.captureTimeWarning),
     ).toBeInTheDocument();
+  });
+
+  it("does not warn about a reference without a capture time", () => {
+    // The reference leads the sequence whatever its time, so a missing one changes nothing.
+    const pasted = { ...reference, captured_at_source: "file_mtime" as const };
+    const view = procedureView([pasted]);
+    serveView(view);
+    renderWithClient(<ProcedureScreen view={view} />);
+
+    expect(
+      within(tile(pasted) as HTMLElement).queryByText(en.procedure.tile.captureTimeWarning),
+    ).toBeNull();
   });
 
   it("a failed photo shows why", () => {

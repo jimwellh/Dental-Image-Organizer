@@ -19,7 +19,11 @@ export function captureOrder(a: PhotoRecord, b: PhotoRecord): number {
 
 const STAGES: readonly (Stage | null)[] = ["pre_op", "intra_op", "post_op", null];
 
-const referenceFirst = (a: PhotoRecord, b: PhotoRecord): number =>
+/**
+ * The reference first, then capture order, as `procedure_case.sequence_order`. The reference is
+ * often a crop pasted from Keynote, whose only time is the paste: it must not trail the photos.
+ */
+export const sequenceOrder = (a: PhotoRecord, b: PhotoRecord): number =>
   Number(b.role === "reference") - Number(a.role === "reference") || captureOrder(a, b);
 
 export function groupByStage(
@@ -27,6 +31,6 @@ export function groupByStage(
 ): { stage: Stage | null; photos: PhotoRecord[] }[] {
   return STAGES.map((stage) => ({
     stage,
-    photos: photos.filter((photo) => (photo.stage ?? null) === stage).sort(referenceFirst),
+    photos: photos.filter((photo) => (photo.stage ?? null) === stage).sort(sequenceOrder),
   })).filter((group) => group.photos.length > 0);
 }
