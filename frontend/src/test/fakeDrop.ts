@@ -52,3 +52,15 @@ export function fakeFlatTransfer(files: File[]): Pick<DataTransfer, "items" | "f
   const items = files.map(() => ({ kind: "file" }));
   return { items, files } as unknown as Pick<DataTransfer, "items" | "files">;
 }
+
+/** The `clipboardData` of a paste: one file item per file, plus an optional text item. */
+export function fakeClipboard(
+  files: File[],
+  { text }: { text?: string } = {},
+): Pick<DataTransfer, "items" | "files"> {
+  const items = [
+    ...files.map((file) => ({ kind: "file", type: file.type, getAsFile: () => file })),
+    ...(text === undefined ? [] : [{ kind: "string", type: "text/plain", getAsFile: () => null }]),
+  ];
+  return { items, files } as unknown as Pick<DataTransfer, "items" | "files">;
+}

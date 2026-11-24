@@ -1,11 +1,8 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { isTopDialog, pushDialog } from "./dialogStack";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-// Open dialogs, oldest first. Only the last one handles the keyboard, so a confirmation opened
-// over a dialog does not also close or trap the dialog beneath it.
-const openDialogs: object[] = [];
 
 // A `div` rather than `<dialog>`: jsdom does not implement `showModal`, and the tests need it.
 export function Dialog(props: {
@@ -25,7 +22,7 @@ export function Dialog(props: {
 
   useEffect(() => {
     const token = {};
-    openDialogs.push(token);
+    const removeDialog = pushDialog(token);
     const opener = document.activeElement;
     const element = panel.current;
     const first = element?.querySelector<HTMLElement>(FOCUSABLE);
@@ -34,7 +31,7 @@ export function Dialog(props: {
     // On `document`, not on the panel: a click on the backdrop moves focus to `body`, and the
     // keys must still reach the dialog.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (openDialogs[openDialogs.length - 1] !== token || !element) return;
+      if (!isTopDialog(token) || !element) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onCloseRef.current();
@@ -63,7 +60,7 @@ export function Dialog(props: {
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      openDialogs.splice(openDialogs.indexOf(token), 1);
+      removeDialog();
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
   }, []);
