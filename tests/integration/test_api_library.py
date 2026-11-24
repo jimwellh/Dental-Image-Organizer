@@ -25,6 +25,7 @@ from dental_image_organizer.api.app import create_app
 from dental_image_organizer.core.slots import DEFAULT_FLIPS
 from dental_image_organizer.services import reveal
 from dental_image_organizer.services.context import AppContext
+from dental_image_organizer.services.export import patient_export_key
 from dental_image_organizer.services.jobs import JobProgress
 from dental_image_organizer.storage.library import local_now
 from support.app import ORIGIN, WAIT_SECONDS, jpeg, make_context
@@ -392,11 +393,12 @@ def test_renaming_and_deleting_wait_for_jobs(client: TestClient, ctx: AppContext
         patient_renamed = client.patch(f"/api/patients/{patient_id}", json={"name": "Alex Wong"})
         noted = client.patch(f"/api/patients/{patient_id}", json={"note": "chart 42"})
         same_title = client.patch(f"/api/cases/{case_id}", json={"title": "implant 16"})
+        patient_deleted = client.delete(f"/api/patients/{patient_id}")
     finally:
         release.set()
     ctx.jobs.wait(job.id, WAIT_SECONDS)
 
-    for response in (renamed, deleted, patient_renamed):
+    for response in (renamed, deleted, patient_renamed, patient_deleted):
         assert response.status_code == 409
         assert _error(response)["code"] == "job_running"
     # Only a rename can leave an export's file names stale; a note can change meanwhile.
@@ -418,12 +420,17 @@ def test_library_changes_never_log_names(client: TestClient, wait_job: WaitJob) 
         client.get(f"/api/cases/{case_id}/archive")
         client.delete(f"/api/cases/{case_id}/photos/{added['added'][0]}")
         client.delete(f"/api/cases/{case_id}")
+        client.delete(f"/api/patients/{patient_id}")
         refused = client.get(f"/api/cases/{case_id}")
 
     assert refused.status_code == 404
-    assert {"case_created", "case_renamed", "photo_deleted", "case_trashed"} <= {
-        e["event"] for e in logs
-    }
+    assert {
+        "case_created",
+        "case_renamed",
+        "photo_deleted",
+        "case_trashed",
+        "patient_trashed",
+    } <= {e["event"] for e in logs}
     text = repr(logs)
     for private in ("Alex", "implant", "chart", "smile"):
         assert private not in text
@@ -443,3 +450,36 @@ def test_photo_changes_check_the_case_type(client: TestClient, wait_job: WaitJob
         "message": "This is a procedure case.",
         "details": {},
     }
+
+
+def test_deleting_a_patient_moves_its_folder_to_the_trash(
+    client: TestClient, ctx: AppContext
+) -> None:
+    created = _create(client)
+    case_id, patient_id = created["case"]["id"], created["patient"]["id"]
+    folder = ctx.library().case_dir(case_id).parent
+
+    deleted = client.delete(f"/api/patients/{patient_id}")
+
+    assert deleted.status_code == 204
+    assert client.get("/api/patients").json() == {"patients": [], "problems": []}
+    assert _error(client.get(f"/api/cases/{case_id}"))["code"] == "case_not_found"
+    assert (ctx.library().root / ".trash" / folder.name / "patient.json").is_file()
+    again = client.delete(f"/api/patients/{patient_id}")
+    assert again.status_code == 404
+    assert _error(again)["code"] == "patient_not_found"
+
+
+def test_deleting_a_patient_waits_for_its_export(client: TestClient, ctx: AppContext) -> None:
+    patient_id = _create(client)["patient"]["id"]
+    release = threading.Event()
+    job = ctx.jobs.submit("hold", _held(release), key=patient_export_key(patient_id))
+    try:
+        refused = client.delete(f"/api/patients/{patient_id}")
+    finally:
+        release.set()
+    ctx.jobs.wait(job.id, WAIT_SECONDS)
+
+    assert refused.status_code == 409
+    assert _error(refused)["code"] == "job_running"
+    assert client.delete(f"/api/patients/{patient_id}").status_code == 204

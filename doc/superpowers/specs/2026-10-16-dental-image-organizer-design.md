@@ -745,7 +745,7 @@ by Time Machine.
 │   │   ├── originals/<sha256[:16]>.<ext>   # immutable originals, deduplicated by SHA-256
 │   │   └── export/                         # user-facing outputs
 │   └── 20261016 Comprehensive oral evaluation/
-└── .trash/                                 # deleted cases (restorable)
+└── .trash/                                 # deleted cases and patients (restorable)
 ```
 
 **App data directories** (resolved by `platformdirs`):
@@ -850,7 +850,7 @@ send the archive again with the answer.
 | `POST /system/update` | Start the in-app update (§7.3); 409 `job_running` while a job is running, 409 `update_unavailable` where it cannot run (off macOS, no launcher record) or while one is already starting |
 | `GET / PUT /settings` | Read / update settings |
 | `GET /patients` | Patients with notes and case summaries, plus the folders that could not be read (damaged, saved by a newer version, or duplicated), so a damaged case is visible instead of silently missing |
-| `PATCH /patients/{id}` | Update a patient's name or note |
+| `PATCH / DELETE /patients/{id}` | Update a patient's name or note; soft-delete the patient folder, with its cases, to `.trash` (409 `job_running` while a job of its cases or its export runs) |
 | `POST /cases` | Create a case `{type, title, patient_id}` for an existing patient, or `{type, title, patient_name, patient_note?}` for a new one |
 | `GET / PATCH / DELETE /cases/{id}` | Read, update (title, sequence selection, `output_scale`, composite settings), soft-delete to `.trash` |
 | `POST /cases/{id}/photos` | Multipart upload (multiple files) → `{job_id, added, skipped: [{name, reason, message}]}`; processing is async; unsupported files are skipped (§3.1). `reason` is one of `video`, `raw`, `sidecar`, `unknown`, `duplicate`, `too_large`. An optional `last_modified` form field per file (milliseconds since the epoch, from the browser's `File.lastModified`) feeds the modification-time fallback of §4.4 step 5 |

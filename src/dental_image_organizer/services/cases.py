@@ -31,6 +31,7 @@ from dental_image_organizer.storage.schema import (
 
 if TYPE_CHECKING:
     from dental_image_organizer.services.context import AppContext
+    from dental_image_organizer.storage.library import PatientEntry
 
 log = structlog.get_logger(__name__)
 
@@ -42,6 +43,9 @@ _REFERENCE_MESSAGE = "Replace the reference instead of deleting it."
 _RENAME_BUSY_MESSAGE = "Wait for the running jobs of this case to finish before renaming it."
 _DELETE_BUSY_MESSAGE = "Wait for the running jobs of this case to finish before deleting it."
 _PATIENT_BUSY_MESSAGE = "Wait for the running jobs of this patient to finish before renaming."
+_PATIENT_DELETE_BUSY_MESSAGE = (
+    "Wait for the running jobs of this patient to finish before deleting it."
+)
 
 
 @dataclass(frozen=True)
@@ -145,12 +149,20 @@ def update_patient(
         library = ctx.library()
         entry = library.patient(patient_id)
         if _display(name) != entry.record.name:
-            jobs = [*(c.id for c in entry.cases), patient_export_key(patient_id)]
-            if ctx.jobs.active_any(jobs):
-                raise JobRunningError(_PATIENT_BUSY_MESSAGE)
+            _refuse_while_patient_busy(ctx, entry, _PATIENT_BUSY_MESSAGE)
         record = library.update_patient(patient_id, name=name, note=note)
         log.info("patient_updated")
         return record
+
+
+def delete_patient(ctx: AppContext, patient_id: str) -> None:
+    """Move the patient folder, with its cases, to `.trash`, where Finder can restore it
+    (spec §4.11)."""
+    with bound_contextvars(patient_id=patient_id):
+        library = ctx.library()
+        _refuse_while_patient_busy(ctx, library.patient(patient_id), _PATIENT_DELETE_BUSY_MESSAGE)
+        library.trash_patient(patient_id)
+        log.info("patient_trashed")
 
 
 def upload_photos(ctx: AppContext, case_id: str, uploads: Sequence[Upload]) -> UploadOutcome:
@@ -235,6 +247,12 @@ def thumbnails(case: CaseRecord) -> list[str]:
 
 def _refuse_while_busy(ctx: AppContext, case: CaseRecord, message: str) -> None:
     if ctx.jobs.active_any([case.id, patient_export_key(case.patient_id)]):
+        raise JobRunningError(message)
+
+
+def _refuse_while_patient_busy(ctx: AppContext, entry: PatientEntry, message: str) -> None:
+    jobs = [*(c.id for c in entry.cases), patient_export_key(entry.record.id)]
+    if ctx.jobs.active_any(jobs):
         raise JobRunningError(message)
 
 

@@ -1,4 +1,4 @@
-"""The library listing, and a patient's name and note (spec §4.11, §4.12)."""
+"""The library listing, and a patient's name, note, and deletion (spec §4.11, §4.12)."""
 
 from __future__ import annotations
 
@@ -27,3 +27,9 @@ def patch_patient(patient_id: str, body: PatientPatch, ctx: Ctx) -> PatientView:
     note = body.note if "note" in body.model_fields_set else current.note
     cases.update_patient(ctx, patient_id, name=name, note=note)
     return PatientView.of(library.patient(patient_id))
+
+
+@router.delete("/patients/{patient_id}", status_code=204)
+def delete_patient(patient_id: str, ctx: Ctx) -> None:
+    # A plain def: the rename waits for the patient's case locks, in the thread pool.
+    cases.delete_patient(ctx, patient_id)
