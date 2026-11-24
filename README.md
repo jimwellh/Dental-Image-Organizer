@@ -3,7 +3,7 @@
 Automated alignment, color matching, and collage generation for clinical intraoral photos.
 It runs locally on the dentist's Mac.
 
-> **Status: early release (0.1.0).** Review processed images before relying on them, and
+> **Status: early release (0.2.0).** Review processed images before relying on them, and
 > report problems in the issue tracker. See the
 > [design spec](doc/superpowers/specs/2026-10-16-dental-image-organizer-design.md).
 
