@@ -88,10 +88,16 @@ The drop zone accepts individual files and whole folders, recursively. Accepted 
      - If the typed name matches an existing patient, the user picks that patient or creates a
        new one. Two patients may share a name; the note tells them apart.
    - **Procedure / site name** — for example `implant maxillary right first molar`.
-2. **Set the reference.** Drop the dentist-edited pre-op photo.
+2. **Set the reference.** Drop, choose, or paste (⌘V) the dentist-edited pre-op photo. It may be
+   edited on the iPhone, or cropped in Keynote, Preview, or a similar app and dragged or copied
+   from there.
    - It is stored as the case reference and **locked**.
-   - Replacing it is an explicit action ("Replace reference…") that re-processes every photo in
-     the case.
+   - The reference needs no capture time: a copied crop carries none, and the reference's place
+     in the sequence never depends on it (step 6).
+   - The browser re-encodes a pasted or dropped TIFF, WebP, BMP, or AVIF image as PNG before it
+     uploads it; other types go to the server as they are.
+   - Replacing it is an explicit action that re-processes every photo in the case: "Replace
+     reference…", or a drop or paste over a locked reference, which asks for confirmation first.
    - The output resolution defaults to the reference size. A tightly cropped reference can be
      smaller than the detail the new photos carry. When the median `detail_ratio` of the case's
      photos (§4.5.1) is ≥ 1.5, the UI suggests raising the output resolution to 1.5× or 2×
@@ -114,8 +120,10 @@ The drop zone accepts individual files and whole folders, recursively. Accepted 
    - The reference is `pre_op`.
    - Let `D0` be the calendar date of the earliest non-reference photo. Photos captured on `D0`
      are `intra_op`. Photos captured after `D0` are `post_op`.
-6. **Sequence.** The user selects 2–10 photos; the default is all photos in capture order. The
-   app renders a horizontal, seamless, equal-height sequence image.
+6. **Sequence.** The user selects 2–10 photos; the default is the reference first, then the other
+   photos in capture order. The app renders a horizontal, seamless, equal-height sequence image.
+   - When the reference is replaced, the new reference takes the old one's place in a saved
+     selection; a selection without the old reference stays without the new one.
    - The sequence image is capped at 200 MP (600 MB uncompressed), the decoder's own limit
      (§4.13), so the app can read back every sequence it writes, and at 65,500 px wide (the JPEG
      limit). A longer or larger series is scaled down to fit; individual photos stay at full
@@ -346,7 +354,8 @@ by future adapters (OpenClaw, Telegram, CLI).
 5. **Capture time.**
    - Read `DateTimeOriginal` and, if present, `OffsetTimeOriginal`.
    - If `DateTimeOriginal` is missing, fall back to the file modification time,
-     `captured_at_source = "file_mtime"`, and show a UI warning.
+     `captured_at_source = "file_mtime"`, and show a UI warning. The reference shows none: its
+     time does not order anything (§3.2 steps 5 and 6).
 6. **Output encoding.**
    - JPEG at quality **92**, 4:4:4 chroma, with an embedded sRGB ICC profile.
    - Preserved EXIF: `DateTimeOriginal`, `OffsetTimeOriginal`, `Make`, `Model`, lens tags.

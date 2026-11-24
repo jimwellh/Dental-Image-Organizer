@@ -11,7 +11,8 @@ It runs locally on the dentist's Mac.
 
 **Procedure sequences**
 
-- The dentist edits one pre-op photo on their iPhone, and it becomes the case reference.
+- The dentist edits one pre-op photo on their iPhone, or crops it in Keynote and drags or
+  pastes it in, and it becomes the case reference.
 - Intra-op and post-op photos are then automatically:
   - aligned to the reference (rotation, scale, translation, and perspective),
   - color-matched to it,
