@@ -47,6 +47,12 @@ the patient folder keeps its `patient.json`, so the Library screen lists the pat
   A failed rename raises `StorageError` and leaves the folder in place.
 - The index is not cleaned by hand. `_indexed` sees that the files are gone, and the next lookup
   rescans, as after `trash_case`.
+- **A trashed patient folder is a whole patient, so `trash_case` must never add to it.** Before
+  this change, `trash_case` reused any `.trash/<folder name>/`. Now it reuses only a folder
+  whose `patient.json` has the case's patient id, and otherwise takes the next free
+  `<name> (n)`. This rule was added after review. Without it, a re-created patient with the
+  same name would put its deleted cases into the old patient's trash folder, and restoring
+  that folder would hand them to the wrong patient.
 
 **Service:** `cases.delete_patient(ctx, patient_id)`.
 
@@ -71,8 +77,10 @@ the patient folder keeps its `patient.json`, so the Library screen lists the pat
   `.trash` folder in the library, that the photos stay on disk, and that the patient disappears
   from the app. A patient with no cases gets wording that does not mention cases.
 - A ref guards against a double click sending two requests, as in `CaseHeader`.
-- On success, the dialog closes and the queries `patients` and `["case"]` are invalidated.
-  Errors go through the existing global `MutationCache.onError`.
+- On success, the dialog closes, the `patients` query is invalidated, and the cached view of
+  each of the patient's cases is removed. Invalidating them is not enough: the case screen
+  shows cached data over a failed refetch, so browser Back would bring a deleted case back on
+  screen. Errors go through the existing global `MutationCache.onError`.
 
 **Spec:**
 

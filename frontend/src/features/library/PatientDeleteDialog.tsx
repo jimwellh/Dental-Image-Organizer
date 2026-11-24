@@ -17,8 +17,11 @@ export function PatientDeleteDialog(props: { patient: PatientView; onClose: () =
     mutationFn: () => deletePatient(patient.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.patients });
-      // Every case of this patient left with its folder; a cached one would show a stale path.
-      void queryClient.invalidateQueries({ queryKey: ["case"] });
+      // Removed, not invalidated: the case screen shows cached data over a failed refetch, so
+      // browser Back would bring a deleted case back on screen (as CaseHeader does on delete).
+      for (const summary of patient.cases) {
+        queryClient.removeQueries({ queryKey: queryKeys.case(summary.id) });
+      }
       onClose();
     },
     onError: () => {

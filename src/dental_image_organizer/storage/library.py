@@ -661,19 +661,33 @@ class Library:
     def trash_case(self, case_id: str) -> Path:
         with self._locks.hold(case_id), self._io:
             folder = self._case_dir(case_id)
-            patient_dir = folder.parent
-            trash_patient = self._root / TRASH_DIR / patient_dir.name
-            try:
-                trash_patient.mkdir(parents=True, exist_ok=True)
-                copy = trash_patient / PATIENT_FILE
-                # Kept beside the case so moving it back in Finder restores it whole.
-                if not copy.exists():
-                    write_atomic(copy, (patient_dir / PATIENT_FILE).read_bytes())
-            except OSError as exc:
-                raise StorageError(f"Saving the case failed: {_reason(exc)}") from exc
+            trash_patient = self._trash_folder_for(folder.parent)
             target = trash_patient / self._unique(trash_patient, folder.name)
             self._rename(folder, target)
             return target
+
+    def _trash_folder_for(self, patient_dir: Path) -> Path:
+        """The `.trash` folder for this patient's deleted cases: the one whose patient.json has
+        its id, else a new one. A same-name folder of another patient is skipped: restoring
+        that folder in Finder would hand this case to the other patient. Call it holding the
+        I/O lock."""
+        try:
+            data = (patient_dir / PATIENT_FILE).read_bytes()
+            patient_id = parse_patient(data).id
+            trash, base, n = self._root / TRASH_DIR, patient_dir.name, 2
+            candidate = trash / base
+            while True:
+                if not candidate.exists():
+                    candidate.mkdir(parents=True)
+                    # Kept beside the case so moving it back in Finder restores it whole.
+                    write_atomic(candidate / PATIENT_FILE, data)
+                    return candidate
+                if _patient_id_in(candidate) == patient_id:
+                    return candidate
+                candidate = trash / f"{base} ({n})"
+                n += 1
+        except OSError as exc:
+            raise StorageError(f"Saving the case failed: {_reason(exc)}") from exc
 
     # -- paths ---------------------------------------------------------------------------
 
@@ -701,6 +715,14 @@ class Library:
         if not resolved.is_relative_to(self._root.resolve()):
             raise PathOutsideLibraryError("The path is outside the library.")
         return resolved
+
+
+def _patient_id_in(folder: Path) -> str | None:
+    """The id in the folder's patient.json, or None when it is missing or unreadable."""
+    try:
+        return parse_patient((folder / PATIENT_FILE).read_bytes()).id
+    except (OSError, StorageError):
+        return None
 
 
 def _duplicate_message(kind: str, other: str) -> str:

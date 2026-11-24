@@ -1,9 +1,10 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
+import { queryKeys } from "../../api/queries";
 import { en } from "../../strings/en";
 import { errorReply, fakeServer } from "../../test/fakeServer";
-import { caseSummary, id, patientsView, patientView } from "../../test/records";
+import { caseSummary, id, patientsView, patientView, procedureView } from "../../test/records";
 import { renderWithClient } from "../../test/render";
 import { LibraryScreen } from "./LibraryScreen";
 
@@ -282,5 +283,27 @@ describe("LibraryScreen", () => {
     const none = await deleteIn(DECOMPOSED_CAFE);
     expect(none).toHaveTextContent(`${DECOMPOSED_CAFE} moves to the .trash folder`);
     expect(none).not.toHaveTextContent("photos stay");
+  });
+
+  it("deleting a patient drops its cached cases, and only those", async () => {
+    fakeServer({
+      "GET /api/patients": () => patientsView({ patients: [li] }),
+      "DELETE /api/patients/:patient_id": () => undefined,
+    });
+    const user = userEvent.setup();
+    const { client } = renderWithClient(<LibraryScreen />);
+    // As if each case screen had been open before: browser Back would show this data again.
+    const deleted = queryKeys.case(id(10));
+    const other = queryKeys.case(id(99));
+    client.setQueryData(deleted, procedureView([]));
+    client.setQueryData(other, procedureView([]));
+
+    await user.click(await screen.findByRole("button", { name: en.library.delete }));
+    await user.click(screen.getByRole("button", { name: en.library.deletePatient.confirm }));
+
+    await waitFor(() => {
+      expect(client.getQueryData(deleted)).toBeUndefined();
+    });
+    expect(client.getQueryData(other)).toBeDefined();
   });
 });

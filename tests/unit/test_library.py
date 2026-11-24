@@ -20,7 +20,7 @@ from dental_image_organizer.errors import (
     StorageError,
 )
 from dental_image_organizer.storage.library import CaseLocks, Library
-from dental_image_organizer.storage.schema import PhotoRecord, new_id
+from dental_image_organizer.storage.schema import PhotoRecord, new_id, parse_patient
 
 NOW = datetime(2026, 10, 16, 14, 30, tzinfo=timezone(timedelta(hours=8)))
 
@@ -459,3 +459,19 @@ def test_trash_patient_waits_for_case_locks(lib: Library) -> None:
     assert not t2.is_alive()
     assert (lib.root / ".trash" / "Alex Wang").is_dir()
     assert not (lib.root / "Alex Wang").exists()
+
+
+def test_trash_case_never_joins_another_patients_trash_folder(lib: Library) -> None:
+    old = lib.create_patient("Sam Lin", None)
+    lib.trash_patient(old.id)  # .trash/Sam Lin/ now holds that patient whole
+    new = lib.create_patient("Sam Lin", None)
+    first = lib.create_case(new.id, "procedure", "implant 16")
+    second = lib.create_case(new.id, "procedure", "implant 26")
+
+    target = lib.trash_case(first.id)
+    again = lib.trash_case(second.id)
+
+    own = lib.root / ".trash" / "Sam Lin (2)"
+    assert (target.parent, again.parent) == (own, own)
+    assert parse_patient((own / "patient.json").read_bytes()).id == new.id
+    assert [p.name for p in (lib.root / ".trash" / "Sam Lin").iterdir()] == ["patient.json"]

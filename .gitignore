@@ -71,3 +71,7 @@ desktop.ini
 .env
 .env.*
 !.env.example
+
+# --- Tool output -------------------------------------------------------------
+# Snapshots and screenshots the Playwright MCP browser writes into the repo root.
+.playwright-mcp/
