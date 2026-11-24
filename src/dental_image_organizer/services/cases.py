@@ -238,10 +238,7 @@ def thumbnails(case: CaseRecord) -> list[str]:
         cells = sorted((SLOTS.index(p.slot), p.id) for p in ready if p.slot is not None)
         ids = [photo_id for _, photo_id in cells]
     else:
-        ordered = sorted(
-            ready, key=lambda p: (p.role != "reference", procedure_case.capture_order(p))
-        )
-        ids = [p.id for p in ordered]
+        ids = [p.id for p in sorted(ready, key=procedure_case.sequence_order)]
     return ids[:MAX_THUMBNAILS]
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import math
 import threading
 from collections.abc import Callable, Iterator
@@ -12,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import structlog
+from PIL import Image
 from structlog.testing import capture_logs
 
 from dental_image_organizer.core.align import AlignModel
@@ -186,27 +188,76 @@ def test_replacing_the_reference_reprocesses_and_drops_manual_edits(
     assert (edit.source, edit.status) == ("auto", "ok")
     assert edit.transform != list(photos.truth)
     assert case.photo(post).edit is not None
-    assert case.sequence == SequenceRecord(photo_ids=[intra, post], gap_px=0)
+    # The new reference takes the old one's place in the saved selection.
+    assert case.sequence == SequenceRecord(photo_ids=[reference.id, intra, post], gap_px=0)
     assert not old_file.exists()
 
 
-def test_a_selection_left_with_one_photo_falls_back_to_capture_order(ctx: AppContext) -> None:
+def test_a_selection_left_with_one_photo_falls_back_to_the_default_order(ctx: AppContext) -> None:
     case_id = _case(ctx)
     _set_reference(ctx, case_id, jpeg(make_scene(64, 600, 400), "2026:10:16 09:00:00"))
-    (photo,) = _upload(
-        ctx, case_id, ("IMG_0001.jpg", jpeg(make_scene(65, 600, 400), "2026:10:16 10:00:00"))
+    chosen = jpeg(make_scene(65, 600, 400), "2026:10:16 10:00:00")
+    photo, earlier = _upload(
+        ctx,
+        case_id,
+        ("IMG_0001.jpg", chosen),
+        ("IMG_0002.jpg", jpeg(make_scene(66, 600, 400), "2026:10:16 08:00:00")),
     )
     old = _read(ctx, case_id).reference()
     assert old is not None
     procedure_case.set_sequence(ctx, case_id, [photo, old.id], 5)
 
-    _set_reference(ctx, case_id, jpeg(make_scene(66, 600, 400), "2026:10:16 08:00:00"))
+    # The selected photo becomes the reference: taking the old one's place repeats it, and one
+    # photo is not a selection set_sequence would accept.
+    _set_reference(ctx, case_id, chosen)
 
     case = _read(ctx, case_id)
     reference = case.reference()
-    assert reference is not None and reference.id != old.id
+    assert reference is not None and reference.id == photo
     assert case.sequence == SequenceRecord(photo_ids=[], gap_px=5)
-    assert [p.id for p in sequence_photos(case)] == [reference.id, photo]
+    # The reference leads even though the other photo was taken before it.
+    assert [p.id for p in sequence_photos(case)] == [photo, earlier]
+
+
+def test_a_selection_without_the_reference_stays_without_it(ctx: AppContext) -> None:
+    case_id = _case(ctx)
+    _set_reference(ctx, case_id, jpeg(make_scene(64, 600, 400), "2026:10:16 09:00:00"))
+    first, second = _upload(
+        ctx,
+        case_id,
+        ("IMG_0001.jpg", jpeg(make_scene(65, 600, 400), "2026:10:16 10:00:00")),
+        ("IMG_0002.jpg", jpeg(make_scene(66, 600, 400), "2026:10:16 11:00:00")),
+    )
+    procedure_case.set_sequence(ctx, case_id, [second, first], 0)
+
+    _set_reference(ctx, case_id, jpeg(make_scene(67, 600, 400), "2026:10:16 08:00:00"))
+
+    assert _read(ctx, case_id).sequence == SequenceRecord(photo_ids=[second, first], gap_px=0)
+
+
+def test_a_reference_without_a_capture_time_leads_the_default_sequence(
+    ctx: AppContext, photos: ProcedureSet
+) -> None:
+    case_id = _case(ctx)
+    intra, post = _upload(
+        ctx, case_id, ("IMG_0001.jpg", photos.intra), ("IMG_0002.jpg", photos.post)
+    )
+    # A crop copied out of Keynote: a PNG without EXIF, pasted after every photo was taken.
+    with Image.open(io.BytesIO(photos.reference)) as decoded:
+        buffer = io.BytesIO()
+        decoded.save(buffer, format="PNG")
+    pasted = upload("image.png", buffer.getvalue(), datetime(2026, 11, 24, 15))
+    outcome = procedure_case.set_reference(ctx, case_id, pasted)
+    assert outcome.job_id is not None
+    wait(ctx, outcome.job_id)
+
+    case = _read(ctx, case_id)
+    reference = case.reference()
+    assert reference is not None
+    assert (reference.state, reference.captured_at_source) == ("ready", "file_mtime")
+    assert [p.id for p in sequence_photos(case)] == [reference.id, intra, post]
+    # The stage rule counts from the photos alone, so the late reference moves no stage.
+    assert [case.photo(i).stage for i in (intra, post)] == ["intra_op", "post_op"]
 
 
 def test_a_photo_dropped_as_reference_becomes_the_reference(
