@@ -231,4 +231,56 @@ describe("LibraryScreen", () => {
     expect(screen.getByRole("dialog", { name: en.library.newCase.titleComposite })).toBeVisible();
     expect(screen.getByLabelText(en.library.newCase.compositeLabel)).toBeInTheDocument();
   });
+
+  it("deleting a patient asks first and sends one request", async () => {
+    const server = fakeServer({
+      "GET /api/patients": () => patientsView({ patients: [li] }),
+      "DELETE /api/patients/:patient_id": () => undefined,
+    });
+    const user = userEvent.setup();
+    renderWithClient(<LibraryScreen />);
+    const deletes = () => server.calls.filter((call) => call.method === "DELETE");
+
+    await user.click(await screen.findByRole("button", { name: en.library.delete }));
+    const asked = screen.getByRole("dialog", { name: en.library.deletePatient.title });
+    expect(asked).toHaveTextContent("Bo Li and its case move to the .trash folder");
+    await user.click(within(asked).getByRole("button", { name: en.common.cancel }));
+    expect(deletes()).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: en.library.delete }));
+    const dialog = screen.getByRole("dialog", { name: en.library.deletePatient.title });
+    await user.dblClick(
+      within(dialog).getByRole("button", { name: en.library.deletePatient.confirm }),
+    );
+
+    await waitFor(() => {
+      expect(deletes().map((call) => call.path)).toEqual([`/api/patients/${li.id}`]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("the delete dialog counts the cases", async () => {
+    const two = patientView({
+      id: id(3),
+      name: "Mei Chen",
+      folder: "Mei Chen",
+      cases: [caseSummary({ id: id(11) }), caseSummary({ id: id(12) })],
+    });
+    fakeServer({ "GET /api/patients": () => patientsView({ patients: [wang, two] }) });
+    const user = userEvent.setup();
+    renderWithClient(<LibraryScreen />);
+    const deleteIn = async (name: string) => {
+      const section = await screen.findByRole("region", { name });
+      await user.click(within(section).getByRole("button", { name: en.library.delete }));
+      return screen.getByRole("dialog", { name: en.library.deletePatient.title });
+    };
+
+    expect(await deleteIn("Mei Chen")).toHaveTextContent("Mei Chen and its 2 cases move");
+    await user.click(screen.getByRole("button", { name: en.common.cancel }));
+    const none = await deleteIn(DECOMPOSED_CAFE);
+    expect(none).toHaveTextContent(`${DECOMPOSED_CAFE} moves to the .trash folder`);
+    expect(none).not.toHaveTextContent("photos stay");
+  });
 });

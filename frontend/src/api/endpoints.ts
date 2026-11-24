@@ -46,6 +46,8 @@ export const patchPatient = (patientId: string, patch: PatientPatch) =>
     apiPath("/api/patients/{patient_id}", { patient_id: patientId }),
     patch,
   );
+export const deletePatient = (patientId: string) =>
+  sendJson<undefined>("DELETE", apiPath("/api/patients/{patient_id}", { patient_id: patientId }));
 
 export const createCase = (body: CaseCreate) =>
   sendJson<CaseView>("POST", apiPath("/api/cases"), body);

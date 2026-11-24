@@ -9,13 +9,15 @@ import { ExportDialog } from "../export/ExportDialog";
 import { CaseCard } from "./CaseCard";
 import { ImportArchiveButton } from "./ImportArchiveButton";
 import { NewCaseDialog } from "./NewCaseDialog";
+import { PatientDeleteDialog } from "./PatientDeleteDialog";
 import { PatientEditDialog } from "./PatientEditDialog";
 
 // The patient is kept by id so a refetch while the dialog is open shows the current record.
 type Open =
   | { kind: "newCase"; type: CaseType }
   | { kind: "edit"; patientId: string }
-  | { kind: "export"; patientId: string };
+  | { kind: "export"; patientId: string }
+  | { kind: "delete"; patientId: string };
 
 export function LibraryScreen() {
   const patients = usePatients();
@@ -121,6 +123,9 @@ export function LibraryScreen() {
       {open?.kind === "edit" && dialogPatient !== undefined && (
         <PatientEditDialog patient={dialogPatient} onClose={close} />
       )}
+      {open?.kind === "delete" && dialogPatient !== undefined && (
+        <PatientDeleteDialog patient={dialogPatient} onClose={close} />
+      )}
       {open?.kind === "export" && dialogPatient !== undefined && (
         <ExportDialog
           target={{
@@ -166,6 +171,14 @@ function PatientSection(props: { patient: PatientView; onOpen: (open: Open) => v
             }}
           >
             {en.library.exportAll}
+          </Button>
+          <Button
+            aria-describedby={headingId}
+            onClick={() => {
+              onOpen({ kind: "delete", patientId: patient.id });
+            }}
+          >
+            {en.library.delete}
           </Button>
         </div>
       </div>

@@ -115,6 +115,18 @@ export const en = {
     problemsTitle: "Folders the library could not read",
     edit: "Edit",
     exportAll: "Export all",
+    delete: "Delete",
+    deletePatient: {
+      title: "Delete this patient?",
+      // Spec §4.11: the patient folder, cases included, moves to `.trash` and can be restored by hand.
+      body: {
+        none: "{name} moves to the .trash folder in the library and disappears from the app.",
+        one: "{name} and its case move to the .trash folder in the library. The photos stay on disk, but the patient disappears from the app.",
+        other:
+          "{name} and its {n} cases move to the .trash folder in the library. The photos stay on disk, but the patient disappears from the app.",
+      },
+      confirm: "Delete patient",
+    },
     caseType: { procedure: "Procedure", composite: "Composite" },
     badges: {
       review: "Needs review {n}",
