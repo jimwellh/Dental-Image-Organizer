@@ -16,6 +16,7 @@ from dental_image_organizer.errors import (
     CaseNotFoundError,
     InvalidNameError,
     PathOutsideLibraryError,
+    PatientNotFoundError,
     StorageError,
 )
 from dental_image_organizer.storage.library import CaseLocks, Library
@@ -378,3 +379,83 @@ def test_update_patient_waits_for_case_locks(lib: Library) -> None:
     assert not t2.is_alive()
     assert (lib.root / "Alex Wong").is_dir()
     assert lib.read_case(case.id).id == case.id
+
+
+def test_trash_patient_moves_the_whole_folder(lib: Library) -> None:
+    patient = lib.create_patient("Alex Wang", None)
+    first = lib.create_case(patient.id, "procedure", "implant 16")
+    lib.create_case(patient.id, "procedure", "implant 26")
+    (lib.root / "Alex Wang" / "notes.txt").write_text("added in Finder")
+
+    target = lib.trash_patient(patient.id)
+
+    assert target == lib.root / ".trash" / "Alex Wang"
+    assert not (lib.root / "Alex Wang").exists()
+    assert (target / "patient.json").is_file()
+    assert (target / "notes.txt").is_file()
+    assert sorted(p.name for p in target.iterdir() if p.is_dir()) == [
+        "20261016 implant 16",
+        "20261016 implant 26",
+    ]
+    assert lib.listing().patients == ()
+    with pytest.raises(PatientNotFoundError):
+        lib.patient_record(patient.id)
+    with pytest.raises(CaseNotFoundError):
+        lib.read_case(first.id)
+
+
+def test_trash_patient_never_merges_into_an_existing_trash_folder(lib: Library) -> None:
+    patient = lib.create_patient("Alex Wang", None)
+    earlier = lib.create_case(patient.id, "procedure", "implant 16")
+    lib.trash_case(earlier.id)  # makes .trash/Alex Wang/
+
+    target = lib.trash_patient(patient.id)
+
+    assert target == lib.root / ".trash" / "Alex Wang (2)"
+    assert (target / "patient.json").is_file()
+    assert (lib.root / ".trash" / "Alex Wang" / "20261016 implant 16" / "case.json").is_file()
+
+
+def test_a_failed_trash_patient_leaves_the_patient_in_place(
+    lib: Library, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patient = lib.create_patient("Alex Wang", None)
+    case = lib.create_case(patient.id, "procedure", "implant 16")
+
+    def refuse(self: Path, target: Path) -> Path:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "rename", refuse)
+    with pytest.raises(StorageError, match="Close any window"):
+        lib.trash_patient(patient.id)
+    monkeypatch.undo()
+
+    assert [e.record.id for e in lib.listing().patients] == [patient.id]
+    assert lib.read_case(case.id).id == case.id
+
+
+def test_trash_patient_waits_for_case_locks(lib: Library) -> None:
+    locks = lib._locks
+    patient = lib.create_patient("Alex Wang", None)
+    case = lib.create_case(patient.id, "procedure", "implant 16")
+    held, release = threading.Event(), threading.Event()
+
+    def holder() -> None:
+        with locks.hold(case.id):
+            held.set()
+            release.wait(5)
+
+    t1 = threading.Thread(target=holder)
+    t1.start()
+    assert held.wait(5)
+    t2 = threading.Thread(target=lambda: lib.trash_patient(patient.id))
+    t2.start()
+    t2.join(0.3)
+    assert t2.is_alive()
+    assert (lib.root / "Alex Wang").exists()
+    release.set()
+    t1.join(5)
+    t2.join(5)
+    assert not t2.is_alive()
+    assert (lib.root / ".trash" / "Alex Wang").is_dir()
+    assert not (lib.root / "Alex Wang").exists()

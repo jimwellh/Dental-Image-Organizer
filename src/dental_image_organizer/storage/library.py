@@ -4,8 +4,9 @@ Lock order: always take a case lock before the I/O lock, never the reverse. A me
 the I/O lock must never wait for a case lock, otherwise two threads could each hold one and wait
 for the other. `update_case` holds the case lock for the whole change but the I/O lock only
 around its read and its write, so a slow change of one case never blocks reads of another.
-`update_patient` renames a folder that holds many cases, so it takes all of their case locks
-first, in sorted id order: two such callers then acquire in the same order and cannot deadlock.
+`update_patient` and `trash_patient` move a folder that holds many cases, so they take all of
+its case locks first, in sorted id order: two such callers then acquire in the same order and
+cannot deadlock.
 """
 
 from __future__ import annotations
@@ -420,30 +421,38 @@ class Library:
             self._patient_dirs[record.id] = folder
             return record
 
-    def update_patient(self, patient_id: str, *, name: str, note: str | None) -> PatientRecord:
-        display = unicodedata.normalize("NFC", name).strip()
-        base = folder_name(display)
+    @contextmanager
+    def _locked_patient(self, patient_id: str) -> Iterator[PatientEntry]:
+        """The patient, held under every one of its case locks and then the I/O lock, for a
+        change that moves the folder all of its cases live in."""
         while True:
             ids = sorted(c.id for c in self.patient(patient_id).cases)
             with ExitStack() as stack:
                 for case_id in ids:
                     stack.enter_context(self._locks.hold(case_id))
-                with self._io:
-                    entry = self.patient(patient_id)
-                    if sorted(c.id for c in entry.cases) != ids:
-                        continue  # a case appeared meanwhile; lock it too
-                    folder, current = entry.folder, entry.record
-                    target = folder.name
-                    if base != folder.name:
-                        target = self._unique(self._root, base, exclude=folder)
-                    if target != folder.name:
-                        self._rename(folder, self._root / target)
-                        self._moved(folder, self._root / target)
-                    record = PatientRecord(
-                        id=current.id, name=display, note=note, created_at=current.created_at
-                    )
-                    self._write(self._root / target / PATIENT_FILE, record, "patient")
-                    return record
+                stack.enter_context(self._io)
+                entry = self.patient(patient_id)
+                if sorted(c.id for c in entry.cases) == ids:
+                    yield entry
+                    return
+                # A case appeared meanwhile: release everything and lock it too.
+
+    def update_patient(self, patient_id: str, *, name: str, note: str | None) -> PatientRecord:
+        display = unicodedata.normalize("NFC", name).strip()
+        base = folder_name(display)
+        with self._locked_patient(patient_id) as entry:
+            folder, current = entry.folder, entry.record
+            target = folder.name
+            if base != folder.name:
+                target = self._unique(self._root, base, exclude=folder)
+            if target != folder.name:
+                self._rename(folder, self._root / target)
+                self._moved(folder, self._root / target)
+            record = PatientRecord(
+                id=current.id, name=display, note=note, created_at=current.created_at
+            )
+            self._write(self._root / target / PATIENT_FILE, record, "patient")
+            return record
 
     def adopt_patient(self, record: PatientRecord) -> PatientEntry:
         """Create the folder for a patient that keeps the id and dates of an imported record."""
@@ -476,6 +485,27 @@ class Library:
                 return
             self._patient_dirs.pop(patient_id, None)
             self._files.pop(folder / PATIENT_FILE, None)
+
+    def trash_patient(self, patient_id: str) -> Path:
+        """Move the patient folder, with its cases, into `.trash` (spec §4.11).
+
+        One rename moves the whole folder, so a failure never leaves some cases behind, and
+        files added in Finder go with it. It never merges into a `.trash` folder of the same
+        name that earlier case deletions made: merging would take one rename per case.
+        """
+        with self._locked_patient(patient_id) as entry:
+            trash = self._root / TRASH_DIR
+            try:
+                trash.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise StorageError(
+                    f"Moving the patient to the trash failed: {_reason(exc)}"
+                ) from exc
+            target = trash / self._unique(trash, entry.folder.name)
+            # The index is left as it is: its signatures no longer match the moved files, so
+            # the next lookup rescans, as after trash_case.
+            self._rename(entry.folder, target)
+            return target
 
     # -- cases ---------------------------------------------------------------------------
 
