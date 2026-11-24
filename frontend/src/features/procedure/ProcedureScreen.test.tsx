@@ -286,6 +286,18 @@ describe("ProcedureScreen", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not warn about a reference without a capture time", () => {
+    // The reference leads the sequence whatever its time, so a missing one changes nothing.
+    const pasted = { ...reference, captured_at_source: "file_mtime" as const };
+    const view = procedureView([pasted]);
+    serveView(view);
+    renderWithClient(<ProcedureScreen view={view} />);
+
+    expect(
+      within(tile(pasted) as HTMLElement).queryByText(en.procedure.tile.captureTimeWarning),
+    ).toBeNull();
+  });
+
   it("a failed photo shows why", () => {
     const photo = photoRecord({
       id: id(2),

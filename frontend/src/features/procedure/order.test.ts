@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { id, photoRecord } from "../../test/records";
-import { captureOrder, groupByStage } from "./order";
+import { captureOrder, groupByStage, sequenceOrder } from "./order";
 
 describe("groupByStage", () => {
   it("groups photos by stage in capture order, the reference first", () => {
@@ -58,5 +58,27 @@ describe("captureOrder", () => {
     const a = photoRecord({ id: id(1) });
     const b = photoRecord({ id: id(2) });
     expect([b, a].sort(captureOrder).map((p) => p.id)).toEqual([a.id, b.id]);
+  });
+});
+
+describe("sequenceOrder", () => {
+  it("puts the reference first whatever its capture time", () => {
+    // A crop pasted from Keynote: its time is the paste, after every photo, or none at all.
+    const pasted = photoRecord({
+      id: id(1),
+      role: "reference",
+      captured_at: "2026-11-24T15:00:00",
+      captured_at_source: "file_mtime",
+    });
+    const undated = photoRecord({ id: id(2), role: "reference", captured_at: null });
+    const photo = photoRecord({ id: id(3), captured_at: "2026-10-16T10:00:00" });
+    const later = photoRecord({ id: id(4), captured_at: "2026-10-20T10:00:00" });
+
+    expect([later, photo, pasted].sort(sequenceOrder).map((p) => p.id)).toEqual([
+      pasted.id,
+      photo.id,
+      later.id,
+    ]);
+    expect([photo, undated].sort(sequenceOrder).map((p) => p.id)).toEqual([undated.id, photo.id]);
   });
 });

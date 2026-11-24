@@ -51,7 +51,8 @@ function Badges({ photo }: { photo: PhotoRecord }) {
           {edit.source === "manual" && <Badge tone="neutral">{en.procedure.tile.manual}</Badge>}
         </>
       )}
-      {photo.captured_at_source === "file_mtime" && (
+      {/* The reference leads the sequence whatever its time, so only the photos need one. */}
+      {!isReference && photo.captured_at_source === "file_mtime" && (
         <Badge tone="warn">{en.procedure.tile.captureTimeWarning}</Badge>
       )}
     </div>

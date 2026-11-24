@@ -54,6 +54,21 @@ describe("SequenceBuilder", () => {
     expect(order()).toEqual(["c.heic", "a.heic", "b.heic"]);
   });
 
+  it("puts the reference first by default, even when its time is later", () => {
+    const reference = photoRecord({
+      id: id(5),
+      role: "reference",
+      source_name: "image.png",
+      captured_at: "2026-11-24T15:00:00",
+      captured_at_source: "file_mtime",
+    });
+    const view = viewOf([a, b, c, reference], []);
+    serve(view);
+    renderWithClient(<SequenceBuilder view={view} />);
+
+    expect(order()).toEqual(["image.png", "c.heic", "a.heic", "b.heic"]);
+  });
+
   it("falls back to every usable photo when fewer than two saved ones remain", () => {
     const pending = photoRecord({ id: id(4), state: "pending", edit: null });
     const view = viewOf([a, b, c, pending], [a.id, pending.id]);
